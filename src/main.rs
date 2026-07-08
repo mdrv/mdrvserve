@@ -25,6 +25,10 @@ struct Args {
     /// Open the preview in the default browser
     #[arg(short, long)]
     open: bool,
+
+    /// Watch subdirectories recursively (directory mode only)
+    #[arg(short, long)]
+    recursive: bool,
 }
 
 #[tokio::main]
@@ -42,7 +46,7 @@ async fn main() -> Result<()> {
         (base_dir, tracked_files, false)
     } else if absolute_path.is_dir() {
         // Directory mode: scan directory for markdown files
-        let tracked_files = scan_markdown_files(&absolute_path)?;
+        let tracked_files = scan_markdown_files(&absolute_path, args.recursive)?;
         if tracked_files.is_empty() {
             anyhow::bail!("No markdown files found in directory");
         }
@@ -56,6 +60,7 @@ async fn main() -> Result<()> {
         base_dir,
         tracked_files,
         is_directory_mode,
+        args.recursive,
         args.hostname,
         args.port,
         args.open,

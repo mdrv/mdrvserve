@@ -49,21 +49,50 @@ enum ServerMessage {
     Reload,
 }
 
-pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn scan_markdown_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
     let mut md_files = Vec::new();
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
+    if recursive {
+        collect_markdown_recursive(dir, &mut md_files)?;
+    } else {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
 
-        if path.is_file() && is_markdown_file(&path) {
-            md_files.push(path);
+            if path.is_file() && is_markdown_file(&path) {
+                md_files.push(path);
+            }
         }
     }
 
     md_files.sort();
 
     Ok(md_files)
+}
+
+fn collect_markdown_recursive(dir: &Path, md_files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_markdown_recursive(&path, md_files)?;
+        } else if path.is_file() && is_markdown_file(&path) {
+            md_files.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Compute a file's key relative to the served base directory, using
+/// forward-slash separators so it matches the URL path. Files directly in
+/// the base directory collapse to just their filename.
+fn relative_key(path: &Path, base_dir: &Path) -> String {
+    let rel = path.strip_prefix(base_dir).unwrap_or(path);
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn is_markdown_file(path: &Path) -> bool {
@@ -97,10 +126,10 @@ impl MarkdownState {
             let content = fs::read_to_string(&file_path)?;
             let html = Self::markdown_to_html(&content)?;
 
-            let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
+            let key = relative_key(&file_path, &base_dir);
 
             tracked_files.insert(
-                filename,
+                key,
                 TrackedFile {
                     path: file_path,
                     last_modified,
@@ -137,9 +166,9 @@ impl MarkdownState {
     }
 
     fn add_tracked_file(&mut self, file_path: PathBuf) -> Result<()> {
-        let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
+        let key = relative_key(&file_path, &self.base_dir);
 
-        if self.tracked_files.contains_key(&filename) {
+        if self.tracked_files.contains_key(&key) {
             return Ok(());
         }
 
@@ -147,7 +176,7 @@ impl MarkdownState {
         let content = fs::read_to_string(&file_path)?;
 
         self.tracked_files.insert(
-            filename,
+            key,
             TrackedFile {
                 path: file_path,
                 last_modified: metadata.modified()?,
@@ -177,16 +206,14 @@ async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
         return;
     }
 
-    let filename = path.file_name().and_then(|n| n.to_str()).map(String::from);
-    let Some(filename) = filename else {
-        return;
-    };
-
     let mut state_guard = state.lock().await;
 
+    // Identify the file by its path relative to the served base directory.
+    let key = relative_key(path, &state_guard.base_dir);
+
     // If file is already tracked, refresh its content
-    if state_guard.tracked_files.contains_key(&filename) {
-        if state_guard.refresh_file(&filename).is_ok() {
+    if state_guard.tracked_files.contains_key(&key) {
+        if state_guard.refresh_file(&key).is_ok() {
             let _ = state_guard.change_tx.send(ServerMessage::Reload);
         }
     } else if state_guard.is_directory_mode {
@@ -266,6 +293,7 @@ fn new_router(
     base_dir: PathBuf,
     tracked_files: Vec<PathBuf>,
     is_directory_mode: bool,
+    is_recursive: bool,
 ) -> Result<Router> {
     let base_dir = base_dir.canonicalize()?;
 
@@ -287,7 +315,12 @@ fn new_router(
         Config::default(),
     )?;
 
-    watcher.watch(&base_dir, RecursiveMode::NonRecursive)?;
+    let watch_mode = if is_recursive {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    watcher.watch(&base_dir, watch_mode)?;
 
     tokio::spawn(async move {
         let _watcher = watcher;
@@ -334,6 +367,7 @@ pub(crate) async fn serve_markdown(
     base_dir: PathBuf,
     tracked_files: Vec<PathBuf>,
     is_directory_mode: bool,
+    is_recursive: bool,
     hostname: impl AsRef<str>,
     port: u16,
     open: bool,
@@ -341,7 +375,12 @@ pub(crate) async fn serve_markdown(
     let hostname = hostname.as_ref();
 
     let first_file = tracked_files.first().cloned();
-    let router = new_router(base_dir.clone(), tracked_files, is_directory_mode)?;
+    let router = new_router(
+        base_dir.clone(),
+        tracked_files,
+        is_directory_mode,
+        is_recursive,
+    )?;
 
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
 
@@ -470,6 +509,95 @@ async fn serve_file(
     }
 }
 
+enum NavNode {
+    File {
+        name: String,
+        full_path: String,
+    },
+    Dir {
+        name: String,
+        children: Vec<NavNode>,
+    },
+}
+
+/// Build the sidebar navigation as an HTML fragment. Top-level files render
+/// as `<li>` entries; directories render as collapsible groups containing a
+/// nested `<ul class="file-list">`. The outer `<ul>` is provided by the
+/// template.
+fn build_sidebar_html(sorted_keys: &[String], current_file: &str) -> String {
+    let mut root: Vec<NavNode> = Vec::new();
+    for key in sorted_keys {
+        let parts: Vec<&str> = key.split('/').collect();
+        nav_insert(&mut root, &parts, key);
+    }
+    render_nav_items(&root, current_file)
+}
+
+fn nav_insert(nodes: &mut Vec<NavNode>, parts: &[&str], full_key: &str) {
+    if parts.is_empty() {
+        return;
+    }
+    if parts.len() == 1 {
+        nodes.push(NavNode::File {
+            name: parts[0].to_string(),
+            full_path: full_key.to_string(),
+        });
+        return;
+    }
+
+    let dir_name = parts[0].to_string();
+    let idx = nodes
+        .iter()
+        .position(|n| matches!(n, NavNode::Dir { name, .. } if name == &dir_name))
+        .unwrap_or_else(|| {
+            nodes.push(NavNode::Dir {
+                name: dir_name.clone(),
+                children: Vec::new(),
+            });
+            nodes.len() - 1
+        });
+
+    if let NavNode::Dir { children, .. } = &mut nodes[idx] {
+        nav_insert(children, &parts[1..], full_key);
+    }
+}
+
+fn render_nav_items(nodes: &[NavNode], current_file: &str) -> String {
+    let mut html = String::new();
+    for node in nodes {
+        match node {
+            NavNode::File { name, full_path } => {
+                let class = if full_path == current_file {
+                    " class=\"active\""
+                } else {
+                    ""
+                };
+                html.push_str(&format!(
+                    "<li><a href=\"/{}\"{}>{}</a></li>\n",
+                    full_path,
+                    class,
+                    escape_html(name)
+                ));
+            }
+            NavNode::Dir { name, children } => {
+                html.push_str(&format!(
+                    "<li class=\"nav-dir\">\n<span class=\"nav-dir-name\">{}</span>\n<ul class=\"file-list\">\n",
+                    escape_html(name)
+                ));
+                html.push_str(&render_nav_items(children, current_file));
+                html.push_str("</ul>\n</li>\n");
+            }
+        }
+    }
+    html
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCode, Html<String>) {
     let env = template_env();
     let template = match env.get_template(TEMPLATE_NAME) {
@@ -498,23 +626,13 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
 
     let rendered = if state.show_navigation() {
         let filenames = state.get_sorted_filenames();
-        let files: Vec<Value> = filenames
-            .iter()
-            .map(|name| {
-                Value::from_object({
-                    let mut map = std::collections::HashMap::new();
-                    map.insert("name".to_string(), Value::from(name.clone()));
-                    map
-                })
-            })
-            .collect();
+        let nav_html = Value::from_safe_string(build_sidebar_html(&filenames, current_file));
 
         match template.render(context! {
             content => content,
             mermaid_enabled => has_mermaid,
             show_navigation => true,
-            files => files,
-            current_file => current_file,
+            nav_html => nav_html,
             page_title => page_title,
         }) {
             Ok(r) => r,
@@ -761,7 +879,7 @@ mod tests {
     fn test_scan_markdown_files_empty_directory() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
 
-        let result = scan_markdown_files(temp_dir.path()).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
         assert_eq!(result.len(), 0);
     }
 
@@ -776,7 +894,7 @@ mod tests {
         fs::write(temp_dir.path().join("test.txt"), "text").expect("Failed to write");
         fs::write(temp_dir.path().join("README"), "readme").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path()).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
 
         assert_eq!(result.len(), 3);
 
@@ -797,7 +915,7 @@ mod tests {
         fs::create_dir(&sub_dir).expect("Failed to create subdir");
         fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path()).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_name().unwrap().to_str().unwrap(), "root.md");
@@ -812,9 +930,32 @@ mod tests {
         fs::write(temp_dir.path().join("test3.Md"), "# Test 3").expect("Failed to write");
         fs::write(temp_dir.path().join("test4.MARKDOWN"), "# Test 4").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path()).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
 
         assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_scan_markdown_files_recursive() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+
+        fs::write(temp_dir.path().join("root.md"), "# Root").expect("Failed to write");
+
+        let sub_dir = temp_dir.path().join("subdir");
+        fs::create_dir(&sub_dir).expect("Failed to create subdir");
+        fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
+
+        let nested_dir = sub_dir.join("deep");
+        fs::create_dir(&nested_dir).expect("Failed to create nested dir");
+        fs::write(nested_dir.join("deeper.md"), "# Deeper").expect("Failed to write");
+
+        // Non-recursive still ignores nested files
+        let flat = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
+        assert_eq!(flat.len(), 1);
+
+        // Recursive picks up nested files
+        let result = scan_markdown_files(temp_dir.path(), true).expect("Failed to scan");
+        assert_eq!(result.len(), 3);
     }
 
     #[test]
@@ -890,7 +1031,7 @@ mod tests {
         let tracked_files = vec![canonical_path];
         let is_directory_mode = false;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
             .expect("Failed to create router");
 
         let server = if use_http {
@@ -924,10 +1065,11 @@ mod tests {
             .expect("Failed to write test3.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir).expect("Failed to scan markdown files");
+        let tracked_files =
+            scan_markdown_files(&base_dir, false).expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
             .expect("Failed to create router");
 
         let server = if use_http {
@@ -948,6 +1090,28 @@ mod tests {
 
     async fn create_directory_server_with_http() -> (TestServer, TempDir) {
         create_directory_server_impl(true)
+    }
+
+    async fn create_recursive_directory_server() -> (TestServer, TempDir) {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+
+        fs::write(temp_dir.path().join("index.md"), TEST_FILE_1_CONTENT)
+            .expect("Failed to write index.md");
+
+        let sub = temp_dir.path().join("guide");
+        fs::create_dir(&sub).expect("Failed to create guide dir");
+        fs::write(sub.join("intro.md"), "# Intro\n\nNested content")
+            .expect("Failed to write guide/intro.md");
+
+        let base_dir = temp_dir.path().to_path_buf();
+        let tracked_files = scan_markdown_files(&base_dir, true).expect("Failed to scan");
+        let is_directory_mode = true;
+
+        let router = new_router(base_dir, tracked_files, is_directory_mode, true)
+            .expect("Failed to create router");
+        let server = TestServer::new(router).expect("Failed to create test server");
+
+        (server, temp_dir)
     }
 
     #[tokio::test]
@@ -1062,7 +1226,7 @@ fn main() {
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files = vec![md_path];
         let is_directory_mode = false;
-        let router = new_router(base_dir, tracked_files, is_directory_mode)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
             .expect("Failed to create router");
         let server = TestServer::new(router).expect("Failed to create test server");
 
@@ -1091,7 +1255,7 @@ fn main() {
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files = vec![md_path];
         let is_directory_mode = false;
-        let router = new_router(base_dir, tracked_files, is_directory_mode)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
             .expect("Failed to create router");
         let server = TestServer::new(router).expect("Failed to create test server");
 
@@ -1403,6 +1567,59 @@ classDiagram
             test2_pos < test3_pos,
             "test2.markdown should appear before test3.md"
         );
+    }
+
+    #[tokio::test]
+    async fn test_recursive_mode_serves_nested_file() {
+        let (server, _temp_dir) = create_recursive_directory_server().await;
+
+        let response = server.get("/guide/intro.md").await;
+        assert_eq!(response.status_code(), 200);
+        let body = response.text();
+        assert!(body.contains("<h1>Intro</h1>"));
+        assert!(body.contains("Nested content"));
+    }
+
+    #[tokio::test]
+    async fn test_recursive_mode_root_file_still_served() {
+        let (server, _temp_dir) = create_recursive_directory_server().await;
+
+        let response = server.get("/index.md").await;
+        assert_eq!(response.status_code(), 200);
+        let body = response.text();
+        assert!(body.contains("<h1>Test 1</h1>"));
+    }
+
+    #[tokio::test]
+    async fn test_recursive_mode_sidebar_shows_tree() {
+        let (server, _temp_dir) = create_recursive_directory_server().await;
+
+        let response = server.get("/index.md").await;
+        assert_eq!(response.status_code(), 200);
+        let body = response.text();
+
+        assert!(
+            body.contains("nav-dir"),
+            "sidebar should render directory groups"
+        );
+        assert!(body.contains("guide"));
+        assert!(body.contains("intro.md"));
+        assert!(body.contains(r#"href="/guide/intro.md""#));
+        assert!(body.contains(r#"href="/index.md""#));
+    }
+
+    #[tokio::test]
+    async fn test_recursive_mode_active_highlight_nested() {
+        let (server, _temp_dir) = create_recursive_directory_server().await;
+
+        let response = server.get("/guide/intro.md").await;
+        assert_eq!(response.status_code(), 200);
+        let body = response.text();
+
+        assert!(body.contains(r#"href="/guide/intro.md" class="active""#));
+
+        let active_count = body.matches(r#"class="active""#).count();
+        assert_eq!(active_count, 1, "Should have exactly one active link");
     }
 
     #[tokio::test]

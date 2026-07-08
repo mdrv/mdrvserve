@@ -207,6 +207,23 @@
             font-weight: 600;
         }
 
+        .nav-dir {
+            margin-top: 8px;
+        }
+
+        .nav-dir-name {
+            display: block;
+            padding: 4px 12px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            opacity: 0.6;
+        }
+
+        .nav-dir > .file-list {
+            padding-left: 12px;
+        }
+
         /* Main Content Area */
         #content {
             /* Center content in remaining space while avoiding sidebar overlap */
@@ -671,13 +688,7 @@
     <div class="sidebar-header"></div>
     <div class="sidebar-content">
         <ul class="file-list">
-            {% for file in files %}
-            <li>
-                <a href="/{{ file.name }}"{% if file.name == current_file %} class="active"{% endif %}>
-                    {{ file.name }}
-                </a>
-            </li>
-            {% endfor %}
+            {{ nav_html }}
         </ul>
     </div>
 </nav>

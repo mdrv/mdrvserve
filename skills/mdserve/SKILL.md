@@ -83,7 +83,7 @@ mdserve must be installed on the user's system. If the `mdserve`
 command is not found, ask the user how they would like to install it
 using `AskUserQuestion` with these options:
 
-1. **Install script** — `curl -sSfL https://raw.githubusercontent.com/jfernandez/mdserve/main/install.sh | bash`
+1. **Install script** — `curl -sSfL https://raw.githubusercontent.com/mdrv/mdserve/main/install.sh | bash`
 2. **Homebrew** — `brew install mdserve`
 3. **Cargo** — `cargo install mdserve`
 4. **Arch Linux** — `sudo pacman -S mdserve`

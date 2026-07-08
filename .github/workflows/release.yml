@@ -1,0 +1,116 @@
+name: Release
+
+# Builds Linux release binaries and publishes a GitHub Release whose title and
+# body come from docs/releases/<tag>.md (frontmatter `title:` + body after the
+# second `---`). Apple/macOS targets are intentionally disabled.
+#
+# To cut a release:
+#   1. Bump `version` in Cargo.toml.
+#   2. Add docs/releases/v<version>.md (copy the latest as a template).
+#   3. Commit, then `git tag v<version> && git push --tags`.
+#
+# If docs/releases/<tag>.md is missing, the release step fails
+# (fail_on_unmatched_body_path) — that is the "prepare for every release" gate.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Report Rust version
+      run: rustup show
+
+    - name: Install target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build release
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Prepare artifact
+      run: |
+        mkdir -p dist
+        cp target/${{ matrix.target }}/release/mdserve dist/mdserve-${{ matrix.target }}
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: mdserve-${{ matrix.target }}
+        path: dist/mdserve-${{ matrix.target }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Extract frontmatter and body
+      id: meta
+      run: |
+        FILE="docs/releases/${{ github.ref_name }}.md"
+
+        if [ ! -f "$FILE" ]; then
+          echo "::error::Release notes not found: $FILE"
+          echo "::error::Add docs/releases/${{ github.ref_name }}.md before tagging."
+          exit 1
+        fi
+
+        # Extract title from YAML frontmatter
+        TITLE=$(grep "^title:" "$FILE" | head -1 | sed 's/^title: *//')
+
+        # Body = everything after the second --- (skip frontmatter)
+        BODY_FILE=$(mktemp)
+        awk '/^---$/{n++;next} n>=2' "$FILE" > "$BODY_FILE"
+
+        echo "title=$TITLE" >> $GITHUB_OUTPUT
+        echo "body_file=$BODY_FILE" >> $GITHUB_OUTPUT
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: mdserve-*
+        path: artifacts
+        merge-multiple: true
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: ${{ steps.meta.outputs.title }}
+        body_path: ${{ steps.meta.outputs.body_file }}
+        fail_on_unmatched_body_path: true
+        files: artifacts/mdserve-*
