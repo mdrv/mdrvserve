@@ -1,20 +1,20 @@
-# mdserve
+# mdrvserve
 
-> **Binary:** `mdserve` · **Maintainer:** MDRV (Umar Alfarouk) · **Rust** 1.82+ / 2021 edition · **MIT**
+> **Binary:** `mdrvserve` · **Maintainer:** MDRV (Umar Alfarouk) · **Rust** 1.82+ / 2021 edition · **MIT**
 
 Markdown preview server for AI coding agents. Follow along as your agent writes
 markdown — rendered live in the browser instead of scrolling past as raw text in
 the terminal.
 
 > [!CAUTION]
-> mdserve is **largely LLM-assisted** code. Most of it was written by AI coding
+> mdrvserve is **largely LLM-assisted** code. Most of it was written by AI coding
 > agents, not hand-reviewed line by line. It works and is exercised by a test
 > suite, but it has not had the scrutiny of a traditional, human-audited
 > codebase. Inspect it before you rely on it. **Use at your own risk.**
 
 ## Features
 
-**Zero config.** `mdserve file.md` just works. No config files, no required
+**Zero config.** `mdrvserve file.md` just works. No config files, no required
 flags.
 
 **Single binary.** One statically-compiled executable, no runtime dependencies.
@@ -29,7 +29,7 @@ is not a long-running server and doesn't need to be.
 diagrams, and directory mode with a navigation sidebar — including `--recursive`
 support for nested subdirectories shown as collapsible groups.
 
-## What mdserve is not
+## What mdrvserve is not
 
 - Not a documentation site generator (use mdBook, Docusaurus, MkDocs, or Astro Starlight).
 - Not a static site server or anything you deploy to production.
@@ -40,13 +40,13 @@ support for nested subdirectories shown as collapsible groups.
 ### macOS (Homebrew)
 
 ```bash
-brew install mdserve
+brew install mdrvserve
 ```
 
 ### Linux
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/mdrv/mdserve/main/install.sh | bash
+curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
 ```
 
 Detects your platform and installs the latest binary.
@@ -54,52 +54,52 @@ Detects your platform and installs the latest binary.
 ### Other methods
 
 ```bash
-cargo install mdserve                                  # Cargo
-sudo pacman -S mdserve                                 # Arch Linux
-nix profile install github:mdrv/mdserve                # Nix
+cargo install mdrvserve                                  # Cargo
+sudo pacman -S mdrvserve                                 # Arch Linux
+nix profile install github:mdrv/mdrvserve                # Nix
 ```
 
 Build from source:
 
 ```bash
-git clone https://github.com/mdrv/mdserve.git
-cd mdserve
+git clone https://github.com/mdrv/mdrvserve.git
+cd mdrvserve
 cargo build --release
-cp target/release/mdserve <folder in your PATH>
+cp target/release/mdrvserve <folder in your PATH>
 ```
 
-Or download a binary from the [latest release](https://github.com/mdrv/mdserve/releases/latest).
+Or download a binary from the [latest release](https://github.com/mdrv/mdrvserve/releases/latest).
 
 ## Claude Code plugin
 
-mdserve ships a [Claude Code plugin](https://code.claude.com/docs/en/plugins-reference.md)
+mdrvserve ships a [Claude Code plugin](https://code.claude.com/docs/en/plugins-reference.md)
 that teaches the agent when and how to launch markdown previews. With it
 installed, Claude Code automatically serves markdown when the content benefits
 from rendered presentation (tables, diagrams, long documents) and skips the
 preview for short responses that read fine in the terminal.
 
 ```
-/plugin install mdserve@mdserve
+/plugin install mdrvserve@mdrvserve
 ```
 
 Installs to user scope by default. Add `--scope project` (all collaborators) or
-`--scope local` (just you in this repo). The `mdserve` binary must also be
+`--scope local` (just you in this repo). The `mdrvserve` binary must also be
 installed (see [Installation](#installation)).
 
 ## Usage
 
 ```bash
 # Serve a single markdown file (default port 3000)
-mdserve README.md
+mdrvserve README.md
 
 # Serve all markdown files in a directory, with a sidebar
-mdserve docs/
+mdrvserve docs/
 
 # Include nested subdirectories in directory mode
-mdserve docs/ --recursive
+mdrvserve docs/ --recursive
 
 # Custom hostname/port, and open in the browser
-mdserve README.md --hostname 0.0.0.0 --port 8080 --open
+mdrvserve README.md --hostname 0.0.0.0 --port 8080 --open
 ```
 
 ### Single-file vs directory mode
@@ -129,6 +129,10 @@ cargo test
 For architecture, modes, rendering internals, and design decisions, see the
 [documentation index](docs/README.md).
 
+## Related packages
+
+- [`mdrv-zx`](https://github.com/mdrv/mdrv-zx) — Mount, index, and manage the /z creative resource store
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -138,3 +142,4 @@ MIT — see [LICENSE](LICENSE).
 - Built with [Axum](https://github.com/tokio-rs/axum)
 - Markdown parsing by [markdown-rs](https://github.com/wooorm/markdown-rs)
 - [Catppuccin](https://catppuccin.com/) color themes
+- Part of the [MDRV](https://github.com/mdrv) ecosystem

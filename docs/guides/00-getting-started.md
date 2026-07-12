@@ -1,11 +1,11 @@
 ```yaml
-mid: mdserve-guide-start
+mid: mdrvserve-guide-start
 label: "00 — Getting Started"
-description: Install mdserve and run your first markdown preview in each mode.
+description: Install mdrvserve and run your first markdown preview in each mode.
 time_created: 2026-06-26T00:00:00+07:00
 time_updated: 2026-06-26T00:00:00+07:00
 scores:
-  mdrv/mdserve: 1000
+  mdrv/mdrvserve: 1000
   guide: 500
   install: 400
 tags: [guide, install, setup, beginner]
@@ -21,7 +21,7 @@ tags_excluded: []
 - Any modern browser.
 
 > [!CAUTION]
-> mdserve is largely LLM-assisted code. It works and is tested, but has not been
+> mdrvserve is largely LLM-assisted code. It works and is tested, but has not been
 > hand-audited. **Use at your own risk.**
 
 ## Install
@@ -30,36 +30,36 @@ Pick one:
 
 ```bash
 # macOS
-brew install mdserve
+brew install mdrvserve
 
 # Linux (detects platform, installs latest binary)
-curl -sSfL https://raw.githubusercontent.com/mdrv/mdserve/main/install.sh | bash
+curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
 
 # Elsewhere
-cargo install mdserve        # Cargo
-sudo pacman -S mdserve       # Arch
-nix profile install github:mdrv/mdserve   # Nix
+cargo install mdrvserve        # Cargo
+sudo pacman -S mdrvserve       # Arch
+nix profile install github:mdrv/mdrvserve   # Nix
 ```
 
 Build from source:
 
 ```bash
-git clone https://github.com/mdrv/mdserve.git
-cd mdserve
+git clone https://github.com/mdrv/mdrvserve.git
+cd mdrvserve
 cargo build --release
-# binary at target/release/mdserve — put it on your PATH
+# binary at target/release/mdrvserve — put it on your PATH
 ```
 
 Verify:
 
 ```bash
-mdserve --version
+mdrvserve --version
 ```
 
 ## Run a single file
 
 ```bash
-mdserve README.md
+mdrvserve README.md
 ```
 
 Open the printed URL (default `http://127.0.0.1:3000`). Edit the file in
@@ -69,7 +69,7 @@ browser automatically.
 ## Run a directory
 
 ```bash
-mdserve docs/
+mdrvserve docs/
 ```
 
 Every `*.md` / `*.markdown` in `docs/` becomes a sidebar entry; new files are
@@ -78,8 +78,8 @@ picked up automatically. The first file alphabetically is served at `/`.
 ## Run a nested tree
 
 ```bash
-mdserve docs/ --recursive
-# or: mdserve docs/ -r
+mdrvserve docs/ --recursive
+# or: mdrvserve docs/ -r
 ```
 
 Subdirectories are scanned and watched; nested files appear as collapsible
@@ -90,10 +90,10 @@ groups in the sidebar and are served at their relative path
 
 ```bash
 # expose on the LAN and open the browser
-mdserve README.md --hostname 0.0.0.0 --port 8080 --open
+mdrvserve README.md --hostname 0.0.0.0 --port 8080 --open
 ```
 
-If the port is busy, mdserve walks up to the next 10 ports automatically.
+If the port is busy, mdrvserve walks up to the next 10 ports automatically.
 
 ## Themes
 
@@ -102,5 +102,5 @@ choice persists in the browser across sessions.
 
 ## Where next
 
-- [10 — Agent Integration](./10-agent-integration.md) — wire mdserve into an AI coding agent.
+- [10 — Agent Integration](./10-agent-integration.md) — wire mdrvserve into an AI coding agent.
 - For how it works inside: [../10-architecture.md](../10-architecture.md).

@@ -1,11 +1,11 @@
 ```yaml
-mid: mdserve-rendering
+mid: mdrvserve-rendering
 label: "40 — Rendering"
 description: Markdown → HTML pipeline, Mermaid, templates, the sidebar tree, and themes.
 time_created: 2026-06-26T00:00:00+07:00
 time_updated: 2026-06-26T00:00:00+07:00
 scores:
-  mdrv/mdserve: 1000
+  mdrv/mdrvserve: 1000
   rendering: 900
   markdown: 600
   mermaid: 500
@@ -16,7 +16,7 @@ tags_excluded: []
 
 # Rendering
 
-mdserve renders markdown to HTML **once per change**, stores the HTML in the
+mdrvserve renders markdown to HTML **once per change**, stores the HTML in the
 tracked file, and reuses it for every request. The request path never parses
 markdown.
 
@@ -30,7 +30,7 @@ markdown.
 ## Mermaid diagrams
 
 A fenced block tagged `` ```mermaid `` is rendered by markdown-rs as
-`<code class="language-mermaid">`. mdserve scans the rendered HTML for that
+`<code class="language-mermaid">`. mdrvserve scans the rendered HTML for that
 class; if present it sets `mermaid_enabled = true`, which conditionally includes
 the bundled `mermaid.min.js` (served from `/mermaid.min.js`) and the init
 script. Pages without diagrams ship no Mermaid payload.
@@ -70,8 +70,8 @@ Five built-in themes selectable from the picker in the top-right corner:
 - Catppuccin Latte, Macchiato, Frappé, Mocha (plus the base light/dark)
 
 Selection is stored in `localStorage` and persists across sessions and files.
-Theme switching is one of the two pieces of client-side JS mdserve ships; the
-other is the WebSocket reload listener.
+Theme switching is one of the two pieces of client-side JS mdrvserve ships; the
+one is the WebSocket reload listener.
 
 ## Styling
 

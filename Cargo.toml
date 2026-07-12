@@ -1,14 +1,18 @@
 [package]
-name = "mdserve"
+name = "mdrvserve"
 version = "266.0.0"
 authors = ["Umar Alfarouk <medrivia@gmail.com>"]
 edition = "2021"
 rust-version = "1.82.0"
 license = "MIT"
 description = "Markdown preview server for AI coding agents"
-repository = "https://github.com/mdrv/mdserve"
-homepage = "https://github.com/mdrv/mdserve"
-documentation = "https://github.com/mdrv/mdserve#readme"
+repository = "https://github.com/mdrv/mdrvserve"
+homepage = "https://github.com/mdrv/mdrvserve"
+documentation = "https://github.com/mdrv/mdrvserve#readme"
+readme = "README.md"
+keywords = ["markdown", "preview", "live-reload", "ai-agents", "websocket"]
+categories = ["command-line-utilities", "web-programming"]
+exclude = [".github/", "docs/", "cliff.toml", "flake.nix", "flake.lock", "AGENTS.md", "install.sh"]
 
 [dependencies]
 axum = { version = "0.7.9", features = ["ws"] }

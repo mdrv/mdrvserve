@@ -7,7 +7,7 @@ mod app;
 use app::{scan_markdown_files, serve_markdown};
 
 #[derive(Parser)]
-#[command(name = "mdserve")]
+#[command(name = "mdrvserve")]
 #[command(about = "A simple HTTP server for markdown preview")]
 #[command(version)]
 struct Args {

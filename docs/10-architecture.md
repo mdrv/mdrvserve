@@ -1,11 +1,11 @@
 ```yaml
-mid: mdserve-architecture
+mid: mdrvserve-architecture
 label: "10 — Architecture"
 description: Components, state management, data flow, routing, and process model.
 time_created: 2026-06-26T00:00:00+07:00
 time_updated: 2026-06-26T00:00:00+07:00
 scores:
-  mdrv/mdserve: 1000
+  mdrv/mdrvserve: 1000
   architecture: 900
   state: 500
   routing: 400
@@ -17,7 +17,7 @@ tags_excluded: []
 
 ## Core idea
 
-mdserve always works with **a base directory** and **a list of one or more
+mdrvserve always works with **a base directory** and **a list of one or more
 tracked files**. The base directory anchors the file watcher and the relative
 keys used to address files; the tracked files hold pre-rendered HTML. Both modes
 reduce to populating those two things.
@@ -71,8 +71,8 @@ URL-portable key that is identical to the request path.
 Mode is a value on the state, decided by user intent (file vs directory
 argument), **not** by file count:
 
-- `mdserve docs/` with one file inside shows the sidebar.
-- `mdserve single.md` never shows the sidebar.
+- `mdrvserve docs/` with one file inside shows the sidebar.
+- `mdrvserve single.md` never shows the sidebar.
 
 Example states:
 
@@ -132,4 +132,4 @@ the tracked-files map (populated from a scanned, canonicalised base directory).
 - A single tokio multi-thread runtime hosts the HTTP server, the watcher event task, and the WebSocket broadcast channel.
 - `notify` events are forwarded through a bounded mpsc channel (capacity 100) so the watcher callback never blocks on async state.
 - The broadcast channel (`change_tx`) fans a single reload event out to every connected client; clients with no page open simply aren't subscribed.
-- **Port retry.** If the requested port is busy (`AddrInUse`), mdserve tries the next port, up to 10 attempts, and reports the one it bound.
+- **Port retry.** If the requested port is busy (`AddrInUse`), mdrvserve tries the next port, up to 10 attempts, and reports the one it bound.

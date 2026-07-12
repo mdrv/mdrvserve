@@ -64,13 +64,13 @@ jobs:
     - name: Prepare artifact
       run: |
         mkdir -p dist
-        cp target/${{ matrix.target }}/release/mdserve dist/mdserve-${{ matrix.target }}
+        cp target/${{ matrix.target }}/release/mdrvserve dist/mdrvserve-${{ matrix.target }}
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: mdserve-${{ matrix.target }}
-        path: dist/mdserve-${{ matrix.target }}
+        name: mdrvserve-${{ matrix.target }}
+        path: dist/mdrvserve-${{ matrix.target }}
 
   release:
     needs: build
@@ -103,7 +103,7 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
-        pattern: mdserve-*
+        pattern: mdrvserve-*
         path: artifacts
         merge-multiple: true
 
@@ -113,4 +113,4 @@ jobs:
         name: ${{ steps.meta.outputs.title }}
         body_path: ${{ steps.meta.outputs.body_file }}
         fail_on_unmatched_body_path: true
-        files: artifacts/mdserve-*
+        files: artifacts/mdrvserve-*

@@ -1,11 +1,11 @@
 ```yaml
-mid: mdserve-cli
+mid: mdrvserve-cli
 label: "30 — CLI Surface"
-description: mdserve invocation, positional arg, flags, defaults, and error behaviour.
+description: mdrvserve invocation, positional arg, flags, defaults, and error behaviour.
 time_created: 2026-06-26T00:00:00+07:00
 time_updated: 2026-06-26T00:00:00+07:00
 scores:
-  mdrv/mdserve: 1000
+  mdrv/mdrvserve: 1000
   cli: 900
   flags: 500
   clap: 300
@@ -15,14 +15,14 @@ tags_excluded: []
 
 # CLI surface
 
-Built with **clap** (`#[derive(Parser)]`). One binary, `mdserve`. There is no
+Built with **clap** (`#[derive(Parser)]`). One binary, `mdrvserve`. There is no
 subcommand layer and no config file — a single positional path plus a handful of
 flags is the entire surface.
 
 ## Invocation
 
 ```bash
-mdserve <PATH> [FLAGS]
+mdrvserve <PATH> [FLAGS]
 ```
 
 `PATH` is required and may be a file or a directory. Everything else is optional.
@@ -53,21 +53,21 @@ mdserve <PATH> [FLAGS]
 
 ## Port selection
 
-If the requested port is already in use, mdserve retries the next port
+If the requested port is already in use, mdrvserve retries the next port
 automatically — up to **10** attempts (`3000` → `3009` by default) — and logs
 the port it actually bound. If none in the range is free, it exits with an
-error. This keeps `mdserve file.md` resilient to "leftover server still
+error. This keeps `mdrvserve file.md` resilient to "leftover server still
 running" without forcing the user to pick a port.
 
 ## Browser open
 
 `--open` launches the user's default browser at the served URL. Without it,
-mdserve prints the URL and waits. The open behaviour uses the platform's default
+mdrvserve prints the URL and waits. The open behaviour uses the platform's default
 handler; there is no browser configuration.
 
 ## Error behaviour
 
-mdserve fails fast and loud rather than serving an empty state:
+mdrvserve fails fast and loud rather than serving an empty state:
 
 | Condition                              | Exit  | Message                                |
 | -------------------------------------- | ----- | -------------------------------------- |
@@ -76,5 +76,5 @@ mdserve fails fast and loud rather than serving an empty state:
 | No free port in the tried range        | error | `could not bind to ports <p>--<p+9>`   |
 | `--recursive` on a single file         | ok    | Ignored (no directory to descend).     |
 
-There is no `--quiet` flag and no JSON output mode; mdserve is meant for humans
+There is no `--quiet` flag and no JSON output mode; mdrvserve is meant for humans
 watching a terminal while an agent works.

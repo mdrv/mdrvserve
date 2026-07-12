@@ -2,7 +2,7 @@
 
 ## Project
 
-mdserve is a markdown preview server built as a companion for AI coding agents.
+mdrvserve is a markdown preview server built as a companion for AI coding agents.
 See the [README](README.md) for project overview and the
 [architecture doc](docs/architecture.md) for design details.
 
@@ -27,10 +27,10 @@ minijinja-embed (changes to `templates/` require a rebuild).
 
 ## Design constraints
 
-- **Agent-companion scope.** mdserve renders markdown that AI agents produce
+- **Agent-companion scope.** mdrvserve renders markdown that AI agents produce
   during coding sessions. Features that push it toward a documentation platform,
   configurable server, or deployment target are out of scope.
-- **Zero config.** `mdserve file.md` must work with no flags or config files.
+- **Zero config.** `mdrvserve file.md` must work with no flags or config files.
 - **Non-recursive.** Directory mode watches only the immediate directory, never
   subdirectories. This is intentional.
 - **Pre-rendered in memory.** All tracked files are rendered to HTML on startup

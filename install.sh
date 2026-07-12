@@ -1,13 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# mdserve installer script
-# Usage: curl -sSfL https://raw.githubusercontent.com/mdrv/mdserve/main/install.sh | bash
+# mdrvserve installer script
+# Usage: curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
 
 # Repository information
 REPO_OWNER="mdrv"
-REPO_NAME="mdserve"
-BINARY_NAME="mdserve"
+REPO_NAME="mdrvserve"
+BINARY_NAME="mdrvserve"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -94,7 +94,7 @@ detect_platform() {
     # Normalize OS
     case "$os" in
         Linux*) os="linux" ;;
-        Darwin*) fatal "macOS is not supported by this installer. Please install using Homebrew: brew install mdserve" ;;
+        Darwin*) fatal "macOS is not supported by this installer. Please install using Homebrew: brew install mdrvserve" ;;
         CYGWIN*|MINGW*|MSYS*) fatal "Windows is not currently supported" ;;
         *) fatal "Unsupported operating system: $os" ;;
     esac
@@ -117,7 +117,8 @@ detect_platform() {
 # Find the best installation directory
 find_install_dir() {
     # Check for user override
-    if [ -n "${MDSERVE_INSTALL_DIR:-}" ]; then
+    if [ -n "${MDRVSERVE_INSTALL_DIR:-}" ]; then
+        echo "$MDRVSERVE_INSTALL_DIR"
         echo "$MDSERVE_INSTALL_DIR"
         return
     fi
@@ -144,7 +145,7 @@ find_install_dir() {
     fi
 
     # Final fallback
-    local fallback_dir="$HOME/.mdserve/bin"
+    local fallback_dir="$HOME/.mdrvserve/bin"
     mkdir -p "$fallback_dir"
     echo "$fallback_dir"
 }
@@ -159,7 +160,7 @@ is_in_path() {
 }
 
 # Main installation function
-install_mdserve() {
+install_mdrvserve() {
     info "Installing $BINARY_NAME..."
 
     # Detect platform
@@ -246,25 +247,25 @@ main() {
     for arg in "$@"; do
         case "$arg" in
             -h|--help)
-                echo "mdserve installer"
+                echo "mdrvserve installer"
                 echo ""
                 echo "Usage: $0 [options]"
                 echo ""
                 echo "Environment variables:"
-                echo "  MDSERVE_INSTALL_DIR   Override installation directory"
+  MDRVSERVE_INSTALL_DIR   Override installation directory
                 echo ""
                 echo "Examples:"
                 echo "  # Install to default location"
                 echo "  curl -sSfL https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/install.sh | bash"
                 echo ""
                 echo "  # Install to custom directory"
-                echo "  MDSERVE_INSTALL_DIR=~/my-tools curl -sSfL ... | bash"
+  MDRVSERVE_INSTALL_DIR=~/my-tools curl -sSfL ... | bash
                 exit 0
                 ;;
         esac
     done
 
-    install_mdserve
+    install_mdrvserve
 }
 
 # Run main function with all arguments

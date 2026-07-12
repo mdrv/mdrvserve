@@ -1,11 +1,11 @@
 ```yaml
-mid: mdserve-modes
+mid: mdrvserve-modes
 label: "20 — Modes"
 description: Single-file, directory, and recursive directory modes — how they differ and what they share.
 time_created: 2026-06-26T00:00:00+07:00
 time_updated: 2026-06-26T00:00:00+07:00
 scores:
-  mdrv/mdserve: 1000
+  mdrv/mdrvserve: 1000
   modes: 800
   recursive: 500
   sidebar: 400
@@ -15,7 +15,7 @@ tags_excluded: []
 
 # Modes
 
-mdserve has one code path and three operating modes, selected by what you pass
+mdrvserve has one code path and three operating modes, selected by what you pass
 on the command line. The mode decides what is scanned, whether subdirectories
 are watched, and whether the sidebar shows.
 
@@ -23,14 +23,14 @@ are watched, and whether the sidebar shows.
 
 | Mode                  | Invocation         | Watches             | Sidebar    | Keys          |
 | --------------------- | ------------------ | ------------------- | ---------- | ------------- |
-| Single-file           | `mdserve file.md`  | parent directory    | no         | filename only |
-| Directory (flat)      | `mdserve docs/`    | immediate directory | yes        | filename only |
-| Directory (recursive) | `mdserve docs/ -r` | directory + subdirs | yes (tree) | relative path |
+| Single-file           | `mdrvserve file.md`  | parent directory    | no         | filename only |
+| Directory (flat)      | `mdrvserve docs/`    | immediate directory | yes        | filename only |
+| Directory (recursive) | `mdrvserve docs/ -r` | directory + subdirs | yes (tree) | relative path |
 
 ## Single-file mode
 
 ```bash
-mdserve README.md
+mdrvserve README.md
 ```
 
 - Argument is a file. The base directory becomes its parent; the tracked list is just that file.
@@ -41,7 +41,7 @@ mdserve README.md
 ## Directory mode (flat)
 
 ```bash
-mdserve docs/
+mdrvserve docs/
 ```
 
 - Argument is a directory. `scan_markdown_files(dir, false)` collects every `*.md` / `*.markdown` in the **immediate** directory only.
@@ -56,8 +56,8 @@ to serve.
 ## Recursive directory mode
 
 ```bash
-mdserve docs/ --recursive
-# or: mdserve docs/ -r
+mdrvserve docs/ --recursive
+# or: mdrvserve docs/ -r
 ```
 
 - `scan_markdown_files(dir, true)` walks the tree (a manual DFS — no extra dependency) and collects every markdown file beneath the directory.

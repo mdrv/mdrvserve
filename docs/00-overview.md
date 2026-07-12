@@ -1,11 +1,11 @@
 ```yaml
-mid: mdserve-overview
+mid: mdrvserve-overview
 label: "00 — Overview & Vision"
-description: What mdserve is, what it is not, design principles, stakeholders, non-goals.
+description: What mdrvserve is, what it is not, design principles, stakeholders, non-goals.
 time_created: 2026-06-26T00:00:00+07:00
 time_updated: 2026-06-26T00:00:00+07:00
 scores:
-  mdrv/mdserve: 1000
+  mdrv/mdrvserve: 1000
   overview: 300
   vision: 200
   principles: 200
@@ -14,28 +14,28 @@ tags: [foundation, scope, vision]
 tags_excluded: [documentation-site, production-server]
 ```
 
-> **Binary:** `mdserve` · **Maintainer:** MDRV · **Rust** 1.82+ / 2021 edition · **MIT**
+> **Binary:** `mdrvserve` · **Maintainer:** MDRV · **Rust** 1.82+ / 2021 edition · **MIT**
 
 > [!CAUTION]
-> mdserve is largely **LLM-assisted** code. It works and is tested, but it has
+> mdrvserve is largely **LLM-assisted** code. It works and is tested, but it has
 > not been hand-audited like a traditional codebase. **Use at your own risk.**
 
-## What mdserve is
+## What mdrvserve is
 
-mdserve is a **markdown preview server built as a companion for AI coding
+mdrvserve is a **markdown preview server built as a companion for AI coding
 agents**. It runs locally during a coding session, renders markdown to HTML in
 the browser, and live-reloads as files change. Concretely, it does four things:
 
 1. **Serves rendered markdown over HTTP.** One file or a whole directory, with GFM (tables, task lists, code blocks) and Mermaid diagram support out of the box.
 2. **Live-reloads on save.** A file watcher re-renders changed files and signals every connected browser to reload over WebSocket. The core loop is: an agent writes, a human reads.
 3. **Presents a directory as a navigable tree.** In directory mode a sidebar lists every `.md`/`.markdown` file; with `--recursive` nested subdirectories become collapsible groups.
-4. **Stays out of the way.** Zero config, zero runtime dependencies, one static binary. `mdserve file.md` just works.
+4. **Stays out of the way.** Zero config, zero runtime dependencies, one static binary. `mdrvserve file.md` just works.
 
-## What mdserve is deliberately not
+## What mdrvserve is deliberately not
 
 These exclusions are part of the contract, not gaps:
 
-- **Not a documentation site generator.** It does not emit deployable HTML. Use mdBook, Docusaurus, MkDocs, or Astro Starlight for that. mdserve renders for the moment, not for publication.
+- **Not a documentation site generator.** It does not emit deployable HTML. Use mdBook, Docusaurus, MkDocs, or Astro Starlight for that. mdrvserve renders for the moment, not for publication.
 - **Not a production server.** It binds to `127.0.0.1` by default, has no auth, no TLS, and no rate limiting. It is meant to be started and killed within a session.
 - **Not a general authoring tool.** The optimisation is for content that AI agents produce during coding, not for long-form manual writing workflows.
 - **Not a search index or knowledge base.** No full-text search, no backlinks, no persistence across runs.
@@ -46,7 +46,7 @@ These resolve the small decisions that recur during implementation.
 
 ### 1. Zero config is a hard constraint
 
-`mdserve file.md` must work with no flags and no config file. Every flag that exists makes the next one easier to justify; resist both. Defaults exist precisely so users never have to set them.
+`mdrvserve file.md` must work with no flags and no config file. Every flag that exists makes the next one easier to justify; resist both. Defaults exist precisely so users never have to set them.
 
 ### 2. Pre-rendered in memory
 
@@ -58,7 +58,7 @@ Markdown rendering, file tracking, the navigation tree, and active-file highligh
 
 ### 4. Ephemeral by design
 
-mdserve is started during a session and killed when it ends. State lives in memory; nothing is persisted. There is no database, no history, no daemon mode.
+mdrvserve is started during a session and killed when it ends. State lives in memory; nothing is persisted. There is no database, no history, no daemon mode.
 
 ### 5. Agent-companion scope
 
@@ -70,9 +70,9 @@ Single-file and directory modes share a single router and state shape. Mode is a
 
 ## Stakeholders
 
-mdserve serves one role, sometimes split across two actors:
+mdrvserve serves one role, sometimes split across two actors:
 
-| Role             | What they want from mdserve                                           |
+| Role             | What they want from mdrvserve                                           |
 | ---------------- | --------------------------------------------------------------------- |
 | **Agent**        | Emit markdown files; expect them to appear rendered without ceremony. |
 | **Human reader** | Watch rendered output update live as the agent works; browse a tree.  |
@@ -81,11 +81,10 @@ Every flag and template branch should serve one of these two.
 
 ## Relationship to other tools
 
-mdserve is **complementary** to documentation site generators, not a competitor.
+mdrvserve is **complementary** to documentation site generators, not a competitor.
 mdBook/Docusaurus/Starlight publish a curated set of documents for an audience;
-mdserve previews whatever an agent is currently producing for the person driving
-the session. A typical flow: iterate with mdserve during development, then hand
-the finished markdown to a site generator for publication.
+mdrvserve previews whatever an agent is currently producing for the person driving
+the session. A typical flow: iterate with mdrvserve during development, then hand
 
 ## Non-goals for v1
 
