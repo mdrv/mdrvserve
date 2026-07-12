@@ -1,8 +1,7 @@
 name: Release
 
-# Builds Linux release binaries and publishes a GitHub Release whose title and
-# body come from docs/releases/<tag>.md (frontmatter `title:` + body after the
-# second `---`). Apple/macOS targets are intentionally disabled.
+# Builds release binaries (Linux, macOS, Windows) and publishes a GitHub
+# Release whose title and body come from docs/releases/<tag>.md
 #
 # To cut a release:
 #   1. Bump `version` in Cargo.toml.
@@ -37,6 +36,14 @@ jobs:
             os: ubuntu-24.04-arm
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -46,7 +53,15 @@ jobs:
     - name: Report Rust version
       run: rustup show
 
+    - name: Install cross-compilation tools
+      if: contains(matrix.target, 'armv7')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-linux-gnueabihf
+        rustup target add ${{ matrix.target }}
+
     - name: Install target
+      if: ${{ !contains(matrix.target, 'armv7') }}
       run: rustup target add ${{ matrix.target }}
 
     - name: Cache dependencies
@@ -59,18 +74,30 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build release
-      run: cargo build --release --target ${{ matrix.target }}
+      shell: bash
+      run: |
+        if [ "${{ matrix.target }}" = "armv7-unknown-linux-musleabihf" ]; then
+          export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=arm-linux-gnueabihf-gcc
+        fi
+        cargo build --release --target ${{ matrix.target }}
 
     - name: Prepare artifact
+      shell: bash
       run: |
         mkdir -p dist
-        cp target/${{ matrix.target }}/release/mdrvserve dist/mdrvserve-${{ matrix.target }}
+        SRC=target/${{ matrix.target }}/release/mdrvserve
+        DST=dist/mdrvserve-${{ matrix.target }}
+        if [[ "${{ matrix.target }}" == *windows* ]]; then
+          SRC="${SRC}.exe"
+          DST="${DST}.exe"
+        fi
+        cp "$SRC" "$DST"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: mdrvserve-${{ matrix.target }}
-        path: dist/mdrvserve-${{ matrix.target }}
+        path: dist/mdrvserve-${{ matrix.target }}*
 
   release:
     needs: build

@@ -1,6 +1,6 @@
 [package]
 name = "mdrvserve"
-version = "266.0.0"
+version = "266.0.1"
 authors = ["Umar Alfarouk <medrivia@gmail.com>"]
 edition = "2021"
 rust-version = "1.82.0"

@@ -37,19 +37,13 @@ support for nested subdirectories shown as collapsible groups.
 
 ## Installation
 
-### macOS (Homebrew)
-
-```bash
-brew install mdrvserve
-```
-
 ### Linux
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
 ```
 
-Detects your platform and installs the latest binary.
+Detects your platform (Linux, macOS, Windows) and installs the latest binary.
 
 ### Other methods
 

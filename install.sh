@@ -94,7 +94,7 @@ detect_platform() {
     # Normalize OS
     case "$os" in
         Linux*) os="linux" ;;
-        Darwin*) fatal "macOS is not supported by this installer. Please install using Homebrew: brew install mdrvserve" ;;
+        Darwin*) os="darwin" ;;
         CYGWIN*|MINGW*|MSYS*) fatal "Windows is not currently supported" ;;
         *) fatal "Unsupported operating system: $os" ;;
     esac
@@ -103,6 +103,7 @@ detect_platform() {
     case "$arch" in
         x86_64|amd64) arch="x86_64" ;;
         aarch64|arm64) arch="aarch64" ;;
+        armv7l) arch="armv7" ;;
         *) fatal "Unsupported architecture: $arch" ;;
     esac
 
@@ -110,6 +111,9 @@ detect_platform() {
     case "$os-$arch" in
         linux-x86_64) echo "x86_64-unknown-linux-musl" ;;
         linux-aarch64) echo "aarch64-unknown-linux-musl" ;;
+        linux-armv7) echo "armv7-unknown-linux-musleabihf" ;;
+        darwin-x86_64) echo "x86_64-apple-darwin" ;;
+        darwin-aarch64) echo "aarch64-apple-darwin" ;;
         *) fatal "No binary available for $os-$arch" ;;
     esac
 }
@@ -119,7 +123,6 @@ find_install_dir() {
     # Check for user override
     if [ -n "${MDRVSERVE_INSTALL_DIR:-}" ]; then
         echo "$MDRVSERVE_INSTALL_DIR"
-        echo "$MDSERVE_INSTALL_DIR"
         return
     fi
 
@@ -252,14 +255,14 @@ main() {
                 echo "Usage: $0 [options]"
                 echo ""
                 echo "Environment variables:"
-  MDRVSERVE_INSTALL_DIR   Override installation directory
+                echo "  MDRVSERVE_INSTALL_DIR   Override installation directory"
                 echo ""
                 echo "Examples:"
                 echo "  # Install to default location"
                 echo "  curl -sSfL https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/install.sh | bash"
                 echo ""
                 echo "  # Install to custom directory"
-  MDRVSERVE_INSTALL_DIR=~/my-tools curl -sSfL ... | bash
+                echo "  MDRVSERVE_INSTALL_DIR=~/my-tools curl -sSfL ... | bash"
                 exit 0
                 ;;
         esac
