@@ -22,42 +22,44 @@ tracked files**. The base directory anchors the file watcher and the relative
 keys used to address files; the tracked files hold pre-rendered HTML. Both modes
 reduce to populating those two things.
 
-```mermaid
-graph LR
-    A[File System] -->|notify events| B[File Watcher]
-    B -->|re-render + update| C[MarkdownState]
-    B -->|broadcast reload| D[WebSocket]
-    E[HTTP Request] -->|lookup key| C
-    C -->|render into template| F[main.html]
-    F -->|HTML| G[Browser]
-    D -->|reload signal| G
+```d2
+File System -> File Watcher: notify events
+File Watcher -> MarkdownState: re-render + update
+File Watcher -> WebSocket: broadcast reload
+HTTP Request -> MarkdownState: lookup key
+MarkdownState -> "Embedded index.html": inject JSON blob
+"Embedded index.html" -> Browser: HTML
+WebSocket -> Browser: reload signal
 ```
 
 ## Components
 
-```mermaid
-classDiagram
-    class MarkdownState {
-        +PathBuf base_dir
-        +HashMap~String,TrackedFile~ tracked_files
-        +bool is_directory_mode
-        +Sender~ServerMessage~ change_tx
-        +show_navigation() bool
-        +get_sorted_filenames() Vec
-    }
-    class TrackedFile {
-        +PathBuf path
-        +SystemTime last_modified
-        +String html
-    }
-    MarkdownState "1" --> "*" TrackedFile : contains
+```d2
+MarkdownState: {
+  shape: class
+  base_dir: PathBuf
+  tracked_files: HashMap<String, TrackedFile>
+  is_directory_mode: bool
+  change_tx: Sender<ServerMessage>
+  d2_enabled: bool
+  latex_enabled: bool
+  show_navigation() bool
+  get_sorted_filenames() Vec
+}
+TrackedFile: {
+  shape: class
+  path: PathBuf
+  last_modified: SystemTime
+  html: String
+}
+MarkdownState -> TrackedFile: contains
 ```
 
 - **`MarkdownState`** — the shared state, held behind an `Arc<Mutex<...>>`. Knows the base directory, the tracked-files map, whether navigation should show, and the broadcast channel.
 - **`TrackedFile`** — the on-disk path, its last-modified time, and its **pre-rendered HTML**. This is what requests actually serve.
 - **File watcher** — `notify` (`RecommendedWatcher`) feeds FS events into an mpsc channel; a spawned tokio task drains the channel, updates state, and broadcasts a reload.
 - **Router** — a single Axum `Router` shared by both modes (see Routing below).
-- **Template environment** — MiniJinja with `main.html` embedded at compile time via `minijinja-embed`.
+- **Frontend bundle** — a Svelte 5 app built to a single `frontend/dist/index.html`, embedded at compile time. Server data is injected into a JSON placeholder at serve time.
 
 ## State management
 
@@ -115,12 +117,12 @@ is_directory_mode = true
 A single unified router handles both modes. Requests resolve a relative key and
 look it up in `tracked_files`.
 
-| Method | Route             | Handler             | Resolves to                                            |
-| ------ | ----------------- | ------------------- | ------------------------------------------------------ |
-| GET    | `/`               | `serve_html_root`   | First tracked file alphabetically (rendered HTML).     |
-| GET    | `/ws`             | `websocket_handler` | WebSocket upgrade; receives `Reload` broadcasts.       |
-| GET    | `/mermaid.min.js` | `serve_mermaid_js`  | Bundled Mermaid library (served only when needed).     |
-| GET    | `/*filename`      | `serve_file`        | Markdown by key, or a static asset/image by extension. |
+| Method | Route             | Handler             | Resolves to                                                    |
+| ------ | ----------------- | ------------------- | -------------------------------------------------------------- |
+| GET    | `/`               | `serve_html_root`   | First tracked file alphabetically (rendered HTML).             |
+| GET    | `/ws`             | `websocket_handler` | WebSocket upgrade; receives `Reload` broadcasts.               |
+| GET    | `/mermaid.min.js` | `serve_mermaid_js`  | Bundled Mermaid JS (only fetched when `--with-mermaid` is on). |
+| GET    | `/*filename`      | `serve_file`        | Markdown by key, or a static asset/image by extension.         |
 
 The `/*filename` route is a **catch-all that accepts `/`** in the path, which is
 what lets recursive keys like `guide/intro.md` resolve. Traversal safety does

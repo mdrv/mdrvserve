@@ -22,13 +22,13 @@ genuinely rough, and what has been decided against.
 - **In-memory only.** Nothing is persisted across runs. Restarting loses no source files (they're on disk) but loses any rendered/scroll state in the browser.
 - **Alphabetical ordering.** Sidebar entries are sorted alphabetically by key. There is no frontmatter `order`/`weight` field and no manual reordering. Directory groups sort by name; files sort by name within their group.
 - **No search.** Directory mode gives you a tree to browse, not a search box.
-- **No syntax highlighting engine.** Code blocks get `language-<lang>` classes; actual colouring depends on the theme / a browser extension. Only Mermaid is rendered actively.
-- **Single template.** One baked-in `main.html`. Customising the look means editing the template and rebuilding.
+- **No syntax highlighting engine.** Code blocks get `language-<lang>` classes; actual colouring depends on the theme / a browser extension. D2 diagrams render to SVG server-side when `--with-d2` is passed. LaTeX math renders to SVG server-side when `--with-latex` is passed.
+- **Single frontend bundle.** One baked-in Svelte app (`frontend/dist/index.html`). Customising the look means editing the Svelte components and rebuilding.
 - **No frontmatter awareness.** mdrvserve renders the file as-is; a YAML/TOML frontmatter block is shown verbatim (markdown-rs may render it as a table or HR). Strip frontmatter upstream if it should not appear.
 
 ## Rough edges
 
-- **Stale template linting.** rust-analyzer / HTML linters emit many false positives against `main.html` (Jinja `{{ }}`/`{% %}`, inline `onclick`, CSS braces). `cargo build` / `cargo test` are authoritative; treat template "errors" from the linter as noise unless the build agrees.
+- **Frontend toolchain dependency.** Rebuilding the UI requires Node/Bun and `bun run build` before `cargo build`. The release binary ships pre-built; this only affects local development.
 - **Atomic saves.** Editors that save by writing-then-renaming (the safe default) are handled correctly because the watcher observes the directory, not just the inode. If a change ever appears to be missed, check that the editor is saving into the watched base directory.
 
 ## Deliberately out of scope (decided)
@@ -36,6 +36,6 @@ genuinely rough, and what has been decided against.
 - **Static site / HTML export.** Use mdBook, Docusaurus, MkDocs, or Astro Starlight.
 - **Authentication, TLS, multi-user serving.** mdrvserve binds to localhost and assumes a trusted single user.
 - **Config files.** Zero-config is a hard constraint; behaviour is flags-only.
-- **Client-side framework / SPA.** Two small scripts (theme + reload) is the ceiling.
+- **Client-side markdown parsing or fetch-based content loading.** The browser receives fully rendered HTML; there is no client-side router or API fetching.
 - **Search, backlinks, graph views.** That is a knowledge-base tool's job (see NX).
 - **Persistence, history, daemon mode.** mdrvserve is ephemeral by design.

@@ -1,36 +1,45 @@
 [package]
 name = "mdrvserve"
-version = "266.0.1"
-authors = ["Umar Alfarouk <medrivia@gmail.com>"]
-edition = "2021"
-rust-version = "1.82.0"
-license = "MIT"
-description = "Markdown preview server for AI coding agents"
-repository = "https://github.com/mdrv/mdrvserve"
-homepage = "https://github.com/mdrv/mdrvserve"
-documentation = "https://github.com/mdrv/mdrvserve#readme"
-readme = "README.md"
-keywords = ["markdown", "preview", "live-reload", "ai-agents", "websocket"]
+version = "267.0.0"
 categories = ["command-line-utilities", "web-programming"]
-exclude = [".github/", "docs/", "cliff.toml", "flake.nix", "flake.lock", "AGENTS.md", "install.sh"]
+documentation = "https://github.com/mdrv/mdrvserve#readme"
+edition = "2021"
+exclude = [
+	".github/",
+	"docs/",
+	".lhg/",
+	"AGENTS.md",
+	"prek.toml",
+	"dprint.jsonc",
+	"install.sh",
+	"frontend/node_modules/",
+	"frontend/src/",
+]
+homepage = "https://github.com/mdrv/mdrvserve"
+keywords = ["markdown", "preview", "live-reload", "ai-agents", "websocket"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/mdrv/mdrvserve"
+rust-version = "1.82.0"
+description = "Markdown preview server for AI coding agents"
 
 [dependencies]
-axum = { version = "0.7.9", features = ["ws"] }
-tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "fs", "time"] }
+anyhow = "1.0.103"
+axum = { version = "0.8.9", features = ["ws"] }
+clap = { version = "4.6.1", features = ["derive"] }
+futures-util = "0.3.32"
 markdown = "1.0"
-clap = { version = "4.5.45", features = ["derive"] }
-tower = "0.5.2"
-tower-http = { version = "0.6.6", features = ["fs", "cors"] }
 notify = "8.2.0"
-futures-util = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-anyhow = "1.0"
-minijinja = "2.12.0"
-minijinja-embed = { version = "2.12.0", default-features = false }
-
-[build-dependencies]
-minijinja-embed = { version = "2.12.0", default-features = false }
+regex = "1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "fs", "time"] }
+tower = "0.5.3"
+tower-http = { version = "0.7.0", features = ["fs", "cors"] }
+ratex-parser = "0.1.13"
+ratex-layout = "0.1.13"
+ratex-svg = { version = "0.1.13", features = ["embed-fonts"] }
+ratex-types = "0.1.13"
 
 [profile.release]
 strip = true
@@ -39,6 +48,6 @@ codegen-units = 1
 panic = "abort"
 
 [dev-dependencies]
-axum-test = { version = "16.0", features = ["ws"] }
-tempfile = "3.0"
-tokio-test = "0.4"
+axum-test = { version = "21.0.0", features = ["ws"] }
+tempfile = "3.27.0"
+tokio-test = "0.4.5"

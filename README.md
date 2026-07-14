@@ -25,9 +25,10 @@ WebSocket. This is the core interaction: an agent writes, a human reads.
 **Ephemeral sessions.** Start it during a session, kill it when you're done. It
 is not a long-running server and doesn't need to be.
 
-**Agent-friendly content.** GFM (tables, task lists, code blocks), Mermaid
-diagrams, and directory mode with a navigation sidebar — including `--recursive`
-support for nested subdirectories shown as collapsible groups.
+**Agent-friendly content.** GFM (tables, task lists, code blocks), opt-in
+D2 / Mermaid / LaTeX math support, and directory mode with a navigation
+sidebar — including `--recursive` support for nested subdirectories shown
+as collapsible groups.
 
 ## What mdrvserve is not
 
@@ -64,22 +65,6 @@ cp target/release/mdrvserve <folder in your PATH>
 
 Or download a binary from the [latest release](https://github.com/mdrv/mdrvserve/releases/latest).
 
-## Claude Code plugin
-
-mdrvserve ships a [Claude Code plugin](https://code.claude.com/docs/en/plugins-reference.md)
-that teaches the agent when and how to launch markdown previews. With it
-installed, Claude Code automatically serves markdown when the content benefits
-from rendered presentation (tables, diagrams, long documents) and skips the
-preview for short responses that read fine in the terminal.
-
-```
-/plugin install mdrvserve@mdrvserve
-```
-
-Installs to user scope by default. Add `--scope project` (all collaborators) or
-`--scope local` (just you in this repo). The `mdrvserve` binary must also be
-installed (see [Installation](#installation)).
-
 ## Usage
 
 ```bash
@@ -94,6 +79,9 @@ mdrvserve docs/ --recursive
 
 # Custom hostname/port, and open in the browser
 mdrvserve README.md --hostname 0.0.0.0 --port 8080 --open
+
+# Render D2 diagrams server-side, LaTeX math, or Mermaid client-side
+mdrvserve doc.md --with-d2 --with-latex --with-mermaid
 ```
 
 ### Single-file vs directory mode
@@ -123,10 +111,6 @@ cargo test
 For architecture, modes, rendering internals, and design decisions, see the
 [documentation index](docs/README.md).
 
-## Related packages
-
-- [`mdrv-zx`](https://github.com/mdrv/mdrv-zx) — Mount, index, and manage the /z creative resource store
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -136,4 +120,5 @@ MIT — see [LICENSE](LICENSE).
 - Built with [Axum](https://github.com/tokio-rs/axum)
 - Markdown parsing by [markdown-rs](https://github.com/wooorm/markdown-rs)
 - [Catppuccin](https://catppuccin.com/) color themes
+- LaTeX math rendering by [RaTeX](https://crates.io/crates/ratex-svg)
 - Part of the [MDRV](https://github.com/mdrv) ecosystem

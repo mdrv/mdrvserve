@@ -1,17 +1,18 @@
 ```yaml
 mid: mdrvserve-rendering
 label: "40 — Rendering"
-description: Markdown → HTML pipeline, Mermaid, templates, the sidebar tree, and themes.
+description: Markdown → HTML pipeline, D2/Mermaid diagrams, the Svelte frontend, sidebar tree, and themes.
 time_created: 2026-06-26T00:00:00+07:00
-time_updated: 2026-06-26T00:00:00+07:00
+time_updated: 2026-07-13T00:00:00+07:00
 scores:
   mdrv/mdrvserve: 1000
   rendering: 900
   markdown: 600
-  mermaid: 500
-  templates: 500
-tags: [rendering, markdown, gfm, mermaid, minijinja, templates, themes]
-tags_excluded: []
+  d2: 500
+  svelte: 400
+  themes: 300
+tags: [rendering, markdown, gfm, d2, mermaid, latex, svelte, themes]
+tags_excluded: [minijinja, templates]
 ```
 
 # Rendering
@@ -24,43 +25,93 @@ markdown.
 
 - **Library:** [`markdown-rs`](https://github.com/wooorm/markdown-rs) (`markdown` crate), invoked via `markdown::to_html_with_options`.
 - **Options:** `Options::gfm()` — GitHub-Flavoured Markdown. Tables, task lists, strikethrough, and fenced code blocks all render natively.
-- No syntax highlighting pass of its own; code blocks get a `class="language-<lang>"` hook that the template/theme can style.
+- No syntax highlighting pass of its own; code blocks get a `class="language-<lang>"` hook that the frontend CSS can style.
 - The rendered HTML is stored as the `html` field on the `TrackedFile`.
 
-## Mermaid diagrams
+## Diagram support
 
-A fenced block tagged `` ```mermaid `` is rendered by markdown-rs as
-`<code class="language-mermaid">`. mdrvserve scans the rendered HTML for that
-class; if present it sets `mermaid_enabled = true`, which conditionally includes
-the bundled `mermaid.min.js` (served from `/mermaid.min.js`) and the init
-script. Pages without diagrams ship no Mermaid payload.
+Both diagram engines are **opt-in** via CLI flags. With no flags, `` ```mermaid ``
+and `` ```d2 `` blocks render as plain fenced code — no payload, no latency.
+LaTeX math (`$...$` / `$$...$$`) is likewise opt-in.
 
-## Templates
+### D2 (server-side, `--with-d2`)
 
-- **Engine:** [MiniJinja](https://github.com/mitsuhiko/minijinja) (Jinja2 syntax).
-- **Embedding:** templates live in `templates/` and are baked into the binary at compile time via `minijinja-embed`. **Editing a template requires a rebuild** — there is no runtime template loading.
-- **Layout:** a single `templates/main.html` wraps the content with the chrome (header, theme picker, sidebar slot, reload script).
+A fenced block tagged `` ```d2 `` is rendered by markdown-rs as
+`<code class="language-d2">`. When `--with-d2` is passed, mdrvserve:
 
-### Template variables
+1. Scans the rendered HTML for `language-d2` code blocks.
+2. Pipes each block's source to the `d2` binary (`d2 - --no-xml-tag --salt=<n>`) on stdin.
+3. Replaces the `<pre><code>` wrapper with `<div class="d2-diagram">…<svg/></div>`.
 
-| Variable          | Type      | Purpose                                                          |
-| ----------------- | --------- | ---------------------------------------------------------------- |
-| `content`         | safe HTML | The pre-rendered markdown body.                                  |
-| `mermaid_enabled` | bool      | Conditionally includes Mermaid JS + init.                        |
-| `show_navigation` | bool      | Whether to render the sidebar slot (directory mode only).        |
-| `nav_html`        | safe HTML | Pre-built sidebar fragment (see below). Omitted when nav is off. |
-| `page_title`      | string    | Filename stem, used for the `<title>`.                           |
+D2 renders **server-side at render time**, so the SVG is inlined into the stored
+HTML — no client JS, no render delay. Each diagram gets a unique `--salt` so
+multiple SVGs in one page never collide on element IDs.
 
-The old `files` list / `current_file` variables have been replaced by the
-server-built `nav_html` fragment — the template no longer iterates files.
+**Graceful degradation.** If the `d2` binary is not on `PATH`, mdrvserve logs a
+warning at startup and the blocks fall back to plain source listings. The page
+still serves.
+
+### Mermaid (client-side, `--with-mermaid`)
+
+A fenced block tagged `` ```mermaid `` is detected by content scan. When
+`--with-mermaid` is passed, mdrvserve sets `mermaidEnabled: true` in the server
+data, and the Svelte frontend lazy-loads the bundled `mermaid.min.js` (served
+from `/mermaid.min.js`) only on pages that contain a diagram. The frontend
+transforms `<pre><code class="language-mermaid">` blocks into
+`<div class="mermaid">` elements, then calls `mermaid.run()`.
+
+Mermaid is heavier than D2 (a ~2.7 MB JS bundle parsed and executed in the
+browser) and has a visible render delay. For server-side rendering without the
+### LaTeX math (server-side, `--with-latex`)
+
+When `--with-latex` is passed, mdrvserve enables the markdown-rs math
+extension (`math_flow` + `math_text` + `math_text_single_dollar`). Inline
+math (`$...$`) is emitted as `<code class="math math-inline">` and display
+math (`$$...$$`) as `<pre><code class="language-math math-display">`.
+mdrvserve post-processes these into SVGs using
+[RaTeX](https://crates.io/crates/ratex-svg) (parser → layout → SVG with
+embedded KaTeX glyph outlines).
+
+Each SVG's `width`/`height` attributes are stripped and replaced with an
+inline `height` computed from the viewBox, so expressions scale naturally
+with the surrounding text and the text-zoom slider. Inline math is wrapped
+in `<span class="latex-inline">`, display math in `<div
+class="latex-display">`. Dark themes apply `filter: invert(1)` to the black
+glyphs.
+
+Like D2, LaTeX renders **server-side at render time** — the SVG is inlined
+into the stored HTML. No client JS, no external fonts.
+
+## Frontend
+
+- **Stack:** [Svelte 5](https://svelte.dev/) + Vite, built to a single
+  self-contained `frontend/dist/index.html` (JS and CSS inlined by
+  `vite-plugin-singlefile`).
+- **Embedding:** the built `index.html` is baked into the binary at compile
+  time via `include_str!`. **Editing a Svelte component requires a frontend
+  rebuild** (`bun run build`) — there is no runtime template loading.
+- **Data injection:** at serve time, mdrvserve replaces the
+  `__MDRV_DATA_PLACEHOLDER__` marker inside the embedded HTML with a JSON blob
+  containing the page content and metadata. The `<` character is escaped to
+  `\u003c` so the blob can never close its own `<script>` tag prematurely.
+
+### Server data fields
+
+| Field            | Type          | Purpose                                                              |
+| ---------------- | ------------- | -------------------------------------------------------------------- |
+| `content`        | string (HTML) | The pre-rendered markdown body.                                      |
+| `navItems`       | NavNode[]     | The sidebar tree (directory mode only). Empty when nav is off.       |
+| `pageTitle`      | string        | Filename stem, used for the `<title>`.                               |
+| `showNavigation` | boolean       | Whether to render the sidebar (directory mode only).                 |
+| `mermaidEnabled` | boolean       | Whether the page contains mermaid blocks AND `--with-mermaid` is on. |
 
 ## Sidebar tree
 
 Because recursive mode keys can be nested (`guide/intro.md`), the sidebar is
-assembled **server-side** into a tree before the template runs (see
-[20 — Modes](./20-modes.md)). The template just drops `{{ nav_html }}` into the
-sidebar slot. Active-file highlighting is baked into the fragment as
-`class="active"` on the matching anchor.
+assembled **server-side** into a tree of `NavNode` values (see
+[20 — Modes](./20-modes.md)), then serialized to JSON. The Svelte
+`SidebarList` component recurses through the tree to render the navigation.
+Active-file highlighting is applied client-side by matching the current URL.
 
 ## Themes
 
@@ -70,12 +121,15 @@ Five built-in themes selectable from the picker in the top-right corner:
 - Catppuccin Latte, Macchiato, Frappé, Mocha (plus the base light/dark)
 
 Selection is stored in `localStorage` and persists across sessions and files.
-Theme switching is one of the two pieces of client-side JS mdrvserve ships; the
-one is the WebSocket reload listener.
+Theme switching, the zoom slider, sidebar collapse, and the WebSocket reload
+listener are the pieces of client-side logic the Svelte app manages.
 
 ## Styling
 
-All CSS lives inline in `main.html`. Directory entries in the sidebar use the
-`.nav-dir` / `.nav-dir-name` classes, with nested `.file-list` indented. There
-is no external stylesheet to theme separately — keep it server-side and
-single-file.
+All CSS lives in `frontend/src/app.css`, compiled into the inlined bundle at
+build time. D2 diagrams use the `.d2-diagram` wrapper class (centered,
+constrained to `max-width: 100%`). LaTeX uses `.latex-inline` (inline-block,
+`vertical-align: -0.25ex`) and `.latex-display` (flex, centered). Directory
+entries in the sidebar use the `.nav-dir` / `.nav-dir-name` classes, with
+nested `.file-list` indented. There is no external stylesheet to theme
+separately — keep it server-side and single-file.

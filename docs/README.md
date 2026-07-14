@@ -46,10 +46,6 @@ These docs describe how mdrvserve works inside, how to run it, and the scope it
 - [00 — Getting Started](./guides/00-getting-started.md) — install and run your first preview
 - [10 — Agent Integration](./guides/10-agent-integration.md) — the Claude Code plugin and the ephemeral-session pattern
 
-### Releases
-
-- [v266.0.0](./releases/v266.0.0.md) — Recursive serving, nav tree, refreshed docs & release pipeline
-
 ## Conventions used throughout
 
 - **One binary.** `mdrvserve`. No config files, no flags required to start.

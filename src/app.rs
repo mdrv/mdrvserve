@@ -10,14 +10,16 @@ use axum::{
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use minijinja::{context, value::Value, Environment};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
+    io::Write,
     net::{Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{Arc, OnceLock},
     time::SystemTime,
 };
@@ -26,22 +28,30 @@ use tokio::{
     sync::{broadcast, mpsc, Mutex},
 };
 use tower_http::cors::CorsLayer;
+use ratex_layout::{layout, to_display_list, LayoutOptions};
+use ratex_parser::parse;
+use ratex_svg::{render_to_svg, SvgOptions};
+use ratex_types::color::Color;
+use ratex_types::math_style::MathStyle;
 
-const TEMPLATE_NAME: &str = "main.html";
-static TEMPLATE_ENV: OnceLock<Environment<'static>> = OnceLock::new();
+const APP_HTML: &str = include_str!("../frontend/dist/index.html");
 const MERMAID_JS: &str = include_str!("../static/js/mermaid.min.js");
 const MERMAID_ETAG: &str = concat!("\"", env!("CARGO_PKG_VERSION"), "\"");
 const MAX_PORT_ATTEMPTS: u16 = 10;
 
+/// Opt-in diagram rendering engines.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct DiagramOpts {
+    /// Render Mermaid diagrams client-side (lazy-loads bundled JS).
+    pub mermaid: bool,
+    /// Render D2 diagrams server-side by shelling out to the `d2` binary.
+    pub d2: bool,
+    /// Render LaTeX math (inline `$...$` and block `$$...$$`) to SVG via RaTeX.
+    pub latex: bool,
+}
+
 type SharedMarkdownState = Arc<Mutex<MarkdownState>>;
 
-fn template_env() -> &'static Environment<'static> {
-    TEMPLATE_ENV.get_or_init(|| {
-        let mut env = Environment::new();
-        minijinja_embed::load_templates!(&mut env);
-        env
-    })
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type")]
@@ -112,11 +122,19 @@ struct MarkdownState {
     base_dir: PathBuf,
     tracked_files: HashMap<String, TrackedFile>,
     is_directory_mode: bool,
+    mermaid_enabled: bool,
+    d2_enabled: bool,
+    latex_enabled: bool,
     change_tx: broadcast::Sender<ServerMessage>,
 }
 
 impl MarkdownState {
-    fn new(base_dir: PathBuf, file_paths: Vec<PathBuf>, is_directory_mode: bool) -> Result<Self> {
+    fn new(
+        base_dir: PathBuf,
+        file_paths: Vec<PathBuf>,
+        is_directory_mode: bool,
+        opts: DiagramOpts,
+    ) -> Result<Self> {
         let (change_tx, _) = broadcast::channel::<ServerMessage>(16);
 
         let mut tracked_files = HashMap::new();
@@ -124,7 +142,7 @@ impl MarkdownState {
             let metadata = fs::metadata(&file_path)?;
             let last_modified = metadata.modified()?;
             let content = fs::read_to_string(&file_path)?;
-            let html = Self::markdown_to_html(&content)?;
+            let html = Self::markdown_to_html(&content, opts)?;
 
             let key = relative_key(&file_path, &base_dir);
 
@@ -142,6 +160,9 @@ impl MarkdownState {
             base_dir,
             tracked_files,
             is_directory_mode,
+            mermaid_enabled: opts.mermaid,
+            d2_enabled: opts.d2,
+            latex_enabled: opts.latex,
             change_tx,
         })
     }
@@ -157,15 +178,17 @@ impl MarkdownState {
     }
 
     fn refresh_file(&mut self, filename: &str) -> Result<()> {
+        let opts = self.opts();
         if let Some(tracked) = self.tracked_files.get_mut(filename) {
             let content = fs::read_to_string(&tracked.path)?;
-            tracked.html = Self::markdown_to_html(&content)?;
+            tracked.html = Self::markdown_to_html(&content, opts)?;
             tracked.last_modified = fs::metadata(&tracked.path)?.modified()?;
         }
         Ok(())
     }
 
     fn add_tracked_file(&mut self, file_path: PathBuf) -> Result<()> {
+        let opts = self.opts();
         let key = relative_key(&file_path, &self.base_dir);
 
         if self.tracked_files.contains_key(&key) {
@@ -180,20 +203,42 @@ impl MarkdownState {
             TrackedFile {
                 path: file_path,
                 last_modified: metadata.modified()?,
-                html: Self::markdown_to_html(&content)?,
+                html: Self::markdown_to_html(&content, opts)?,
             },
         );
 
         Ok(())
     }
 
-    fn markdown_to_html(content: &str) -> Result<String> {
+    fn opts(&self) -> DiagramOpts {
+        DiagramOpts {
+            mermaid: self.mermaid_enabled,
+            d2: self.d2_enabled,
+            latex: self.latex_enabled,
+        }
+    }
+
+    fn markdown_to_html(content: &str, opts: DiagramOpts) -> Result<String> {
         let mut options = markdown::Options::gfm();
         options.compile.allow_dangerous_html = true;
         options.parse.constructs.frontmatter = true;
 
-        let html_body = markdown::to_html_with_options(content, &options)
+        if opts.latex {
+            options.parse.constructs.math_flow = true;
+            options.parse.constructs.math_text = true;
+            options.parse.math_text_single_dollar = true;
+        }
+
+        let mut html_body = markdown::to_html_with_options(content, &options)
             .unwrap_or_else(|_| "Error parsing markdown".to_string());
+
+        if opts.d2 {
+            html_body = render_d2_blocks(&html_body);
+        }
+
+        if opts.latex {
+            html_body = render_latex_blocks(&html_body);
+        }
 
         Ok(html_body)
     }
@@ -294,6 +339,7 @@ fn new_router(
     tracked_files: Vec<PathBuf>,
     is_directory_mode: bool,
     is_recursive: bool,
+    opts: DiagramOpts,
 ) -> Result<Router> {
     let base_dir = base_dir.canonicalize()?;
 
@@ -301,6 +347,7 @@ fn new_router(
         base_dir.clone(),
         tracked_files,
         is_directory_mode,
+        opts,
     )?));
 
     let watcher_state = state.clone();
@@ -333,7 +380,7 @@ fn new_router(
         .route("/", get(serve_html_root))
         .route("/ws", get(websocket_handler))
         .route("/mermaid.min.js", get(serve_mermaid_js))
-        .route("/*filename", get(serve_file))
+        .route("/{*filename}", get(serve_file))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -371,8 +418,16 @@ pub(crate) async fn serve_markdown(
     hostname: impl AsRef<str>,
     port: u16,
     open: bool,
+    opts: DiagramOpts,
 ) -> Result<()> {
     let hostname = hostname.as_ref();
+
+    if opts.d2 && !d2_available() {
+        eprintln!(
+            "⚠ --with-d2 set but the `d2` binary was not found on PATH.\n  \
+             D2 code blocks will render as plain source. Install D2: https://d2lang.com\n"
+        );
+    }
 
     let first_file = tracked_files.first().cloned();
     let router = new_router(
@@ -380,6 +435,7 @@ pub(crate) async fn serve_markdown(
         tracked_files,
         is_directory_mode,
         is_recursive,
+        opts,
     )?;
 
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
@@ -509,10 +565,14 @@ async fn serve_file(
     }
 }
 
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
 enum NavNode {
     File {
         name: String,
+        #[serde(rename = "fullPath")]
         full_path: String,
+        abbr: String,
     },
     Dir {
         name: String,
@@ -520,17 +580,13 @@ enum NavNode {
     },
 }
 
-/// Build the sidebar navigation as an HTML fragment. Top-level files render
-/// as `<li>` entries; directories render as collapsible groups containing a
-/// nested `<ul class="file-list">`. The outer `<ul>` is provided by the
-/// template.
-fn build_sidebar_html(sorted_keys: &[String], current_file: &str) -> String {
+fn build_nav_data(sorted_keys: &[String]) -> Vec<NavNode> {
     let mut root: Vec<NavNode> = Vec::new();
     for key in sorted_keys {
         let parts: Vec<&str> = key.split('/').collect();
         nav_insert(&mut root, &parts, key);
     }
-    render_nav_items(&root, current_file)
+    root
 }
 
 fn nav_insert(nodes: &mut Vec<NavNode>, parts: &[&str], full_key: &str) {
@@ -541,6 +597,7 @@ fn nav_insert(nodes: &mut Vec<NavNode>, parts: &[&str], full_key: &str) {
         nodes.push(NavNode::File {
             name: parts[0].to_string(),
             full_path: full_key.to_string(),
+            abbr: file_abbr(parts[0]),
         });
         return;
     }
@@ -562,105 +619,228 @@ fn nav_insert(nodes: &mut Vec<NavNode>, parts: &[&str], full_key: &str) {
     }
 }
 
-fn render_nav_items(nodes: &[NavNode], current_file: &str) -> String {
-    let mut html = String::new();
-    for node in nodes {
-        match node {
-            NavNode::File { name, full_path } => {
-                let class = if full_path == current_file {
-                    " class=\"active\""
-                } else {
-                    ""
-                };
-                html.push_str(&format!(
-                    "<li><a href=\"/{}\"{}>{}</a></li>\n",
-                    full_path,
-                    class,
-                    escape_html(name)
-                ));
-            }
-            NavNode::Dir { name, children } => {
-                html.push_str(&format!(
-                    "<li class=\"nav-dir\">\n<span class=\"nav-dir-name\">{}</span>\n<ul class=\"file-list\">\n",
-                    escape_html(name)
-                ));
-                html.push_str(&render_nav_items(children, current_file));
-                html.push_str("</ul>\n</li>\n");
-            }
-        }
+/// Generate a 1-2 character abbreviation for a file name, suitable for the
+/// collapsed sidebar circle buttons. Prefers uppercase initials (handles
+/// PascalCase / camelCase names), falls back to the first two characters.
+fn file_abbr(name: &str) -> String {
+    let stem = name
+        .trim_end_matches(".md")
+        .trim_end_matches(".markdown");
+    let caps: String = stem.chars().filter(|c| c.is_uppercase()).collect();
+    match caps.len() {
+        0 => stem.chars().take(2).collect(),
+        _ => caps.chars().take(2).collect(),
     }
-    html
 }
 
-fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+/// Whether the `d2` binary is available on PATH. Cached for the process.
+fn d2_available() -> bool {
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| {
+        Command::new("d2")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Replace every ` ```d2 ` code block in `html` with an inline SVG rendered by
+/// the `d2` binary. Blocks that fail to render (or when `d2` is absent) are
+/// left untouched so the source remains visible.
+fn render_d2_blocks(html: &str) -> String {
+    if !d2_available() {
+        return html.to_string();
+    }
+
+    let re = Regex::new(r#"(?s)<pre><code class="language-d2">(.*?)</code></pre>"#)
+        .expect("static regex");
+
+    let mut result = String::with_capacity(html.len());
+    let mut last_end = 0;
+    let mut index = 0u32;
+
+    for caps in re.captures_iter(html) {
+        let m = caps.get(0).unwrap();
+        result.push_str(&html[last_end..m.start()]);
+
+        let source = unescape_html(&caps[1]);
+        match render_one_d2(&source, index) {
+            Ok(svg) => {
+                result.push_str(r#"<div class="d2-diagram">"#);
+                result.push_str(&svg);
+                result.push_str("</div>");
+            }
+            Err(_) => {
+                // Leave the original block intact so the source is visible.
+                result.push_str(m.as_str());
+            }
+        }
+
+        last_end = m.end();
+        index += 1;
+    }
+    result.push_str(&html[last_end..]);
+    result
+}
+
+/// Render a single D2 source snippet to SVG via `d2 -` (stdin → stdout).
+fn render_one_d2(source: &str, index: u32) -> Result<String> {
+    let mut child = Command::new("d2")
+        .args([
+            "--no-xml-tag",
+            &format!("--salt=mdrv{}", index),
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `d2`")?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(source.as_bytes())?;
+    }
+    // Drop stdin to signal EOF.
+    child.stdin.take();
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait on `d2`")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "d2 exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Reverse the HTML entity encoding that markdown-rs applies to code block
+/// bodies. `&amp;` is handled last so it does not corrupt the other entities.
+fn unescape_html(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Replace every math element (inline `$...$` and block `$$...$$`) in `html`
+/// with an inline SVG rendered by RaTeX. Elements that fail to parse are
+/// left untouched so the source remains visible.
+fn render_latex_blocks(html: &str) -> String {
+    // Display math: <pre><code class="language-math math-display">CONTENT</code></pre>
+    let display_re = Regex::new(
+        r#"(?s)<pre><code class="language-math math-display">(.*?)</code></pre>"#,
+    )
+    .expect("static regex");
+    let mut result = display_re
+        .replace_all(html, |caps: &regex::Captures| {
+            let source = unescape_html(&caps[1]);
+            match render_one_latex(&source, false) {
+                Ok(svg) => format!(r#"<div class="latex-display">{svg}</div>"#),
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .into_owned();
+
+    // Inline math: <code class="language-math math-inline">CONTENT</code>
+    let inline_re = Regex::new(
+        r#"(?s)<code class="language-math math-inline">(.*?)</code>"#,
+    )
+    .expect("static regex");
+    result = inline_re
+        .replace_all(&result, |caps: &regex::Captures| {
+            let source = unescape_html(&caps[1]);
+            match render_one_latex(&source, true) {
+                Ok(svg) => format!(r#"<span class="latex-inline">{svg}</span>"#),
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .into_owned();
+
+    result
+}
+
+/// Render a single LaTeX math expression to an SVG string via RaTeX.
+/// `inline` controls the math style (Text vs Display).
+fn render_one_latex(source: &str, inline: bool) -> Result<String> {
+    let ast = parse(source).map_err(|e| anyhow::anyhow!("LaTeX parse error: {e}"))?;
+    let style = if inline {
+        MathStyle::Text
+    } else {
+        MathStyle::Display
+    };
+    let layout_opts = LayoutOptions::default()
+        .with_style(style)
+        .with_color(Color::BLACK);
+    let lbox = layout(&ast, &layout_opts);
+    let display_list = to_display_list(&lbox);
+    let font_size = if inline { 20.0 } else { 32.0 };
+    let svg_opts = SvgOptions {
+        font_size,
+        padding: 0.0,
+        stroke_width: 1.0,
+        embed_glyphs: true,
+        font_dir: String::new(),
+    };
+    let svg = render_to_svg(&display_list, &svg_opts);
+    Ok(scale_svg_to_em(&svg, font_size))
+}
+
+fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
+    let viewbox_re = regex::Regex::new(r#"viewBox="[\d.\-]+ [\d.\-]+ [\d.\-]+ ([\d.\-]+)""#).unwrap();
+    let dim_re = regex::Regex::new(r#"\s(?:width|height)="[^"]*""#).unwrap();
+    let stripped = dim_re.replace_all(svg, "");
+    match viewbox_re.captures(&stripped) {
+        Some(caps) => {
+            let vh: f64 = caps[1].parse().unwrap_or(font_size);
+            let em = vh / font_size;
+            stripped.replacen("<svg", &format!("<svg style=\"height:{em}em;width:auto\""), 1).to_string()
+        }
+        None => stripped.to_string(),
+    }
 }
 
 async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCode, Html<String>) {
-    let env = template_env();
-    let template = match env.get_template(TEMPLATE_NAME) {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!("Template error: {e}")),
-            );
-        }
+    let content = match state.tracked_files.get(current_file) {
+        Some(tracked) => tracked.html.as_str(),
+        None => return (StatusCode::NOT_FOUND, Html("File not found".to_string())),
     };
 
-    let (content, has_mermaid) = if let Some(tracked) = state.tracked_files.get(current_file) {
-        let html = &tracked.html;
-        let mermaid = html.contains(r#"class="language-mermaid""#);
-        (Value::from_safe_string(html.clone()), mermaid)
-    } else {
-        return (StatusCode::NOT_FOUND, Html("File not found".to_string()));
-    };
+    let has_mermaid = state.mermaid_enabled && content.contains(r#"class="language-mermaid""#);
 
-    // Derive page title from filename (stem without extension)
     let page_title = std::path::Path::new(current_file)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(current_file);
 
-    let rendered = if state.show_navigation() {
-        let filenames = state.get_sorted_filenames();
-        let nav_html = Value::from_safe_string(build_sidebar_html(&filenames, current_file));
-
-        match template.render(context! {
-            content => content,
-            mermaid_enabled => has_mermaid,
-            show_navigation => true,
-            nav_html => nav_html,
-            page_title => page_title,
-        }) {
-            Ok(r) => r,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Html(format!("Rendering error: {e}")),
-                );
-            }
-        }
+    let show_nav = state.show_navigation();
+    let nav_items = if show_nav {
+        build_nav_data(&state.get_sorted_filenames())
     } else {
-        match template.render(context! {
-            content => content,
-            mermaid_enabled => has_mermaid,
-            show_navigation => false,
-            page_title => page_title,
-        }) {
-            Ok(r) => r,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Html(format!("Rendering error: {e}")),
-                );
-            }
-        }
+        Vec::new()
     };
 
-    (StatusCode::OK, Html(rendered))
+    let data = serde_json::json!({
+        "content": content,
+        "navItems": nav_items,
+        "pageTitle": page_title,
+        "showNavigation": show_nav,
+        "mermaidEnabled": has_mermaid,
+    });
+
+    let mut json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".to_string());
+    // Escape < to prevent </script> breaking the HTML parser
+    json = json.replace('<', "\\u003c");
+
+    let html = APP_HTML.replace("__MDRV_DATA_PLACEHOLDER__", &json);
+
+    (StatusCode::OK, Html(html))
 }
 
 async fn serve_mermaid_js(headers: HeaderMap) -> impl IntoResponse {
@@ -791,7 +971,7 @@ async fn handle_websocket(socket: WebSocket, state: SharedMarkdownState) {
     let send_task = tokio::spawn(async move {
         while let Ok(reload_msg) = change_rx.recv().await {
             if let Ok(json) = serde_json::to_string(&reload_msg) {
-                if sender.send(Message::Text(json)).await.is_err() {
+                if sender.send(Message::Text(json.into())).await.is_err() {
                     break;
                 }
             }
@@ -1012,7 +1192,38 @@ mod tests {
         "---\ntitle: Test Post\nauthor: Name\n---\n\n# Test Post\n";
     const TOML_FRONTMATTER_CONTENT: &str = "+++\ntitle = \"Test Post\"\n+++\n\n# Test Post\n";
 
-    fn create_test_server_impl(content: &str, use_http: bool) -> (TestServer, NamedTempFile) {
+    fn extract_mdrv_data(body: &str) -> serde_json::Value {
+        let marker = r#"id="__mdrv-data">"#;
+        match body.find(marker) {
+            Some(start) => {
+                let rest = &body[start + marker.len()..];
+                match rest.find("</script>") {
+                    Some(end) => {
+                        serde_json::from_str(&rest[..end]).unwrap_or(serde_json::Value::Null)
+                    }
+                    None => serde_json::Value::Null,
+                }
+            }
+            None => serde_json::Value::Null,
+        }
+    }
+
+    fn extract_content(body: &str) -> String {
+        extract_mdrv_data(body)["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn extract_nav_json(body: &str) -> String {
+        serde_json::to_string(&extract_mdrv_data(body)["navItems"]).unwrap_or_default()
+    }
+
+    fn create_test_server_impl(
+        content: &str,
+        use_http: bool,
+        opts: DiagramOpts,
+    ) -> (TestServer, NamedTempFile) {
         let temp_file = Builder::new()
             .suffix(".md")
             .tempfile()
@@ -1031,27 +1242,38 @@ mod tests {
         let tracked_files = vec![canonical_path];
         let is_directory_mode = false;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false, opts)
             .expect("Failed to create router");
 
         let server = if use_http {
             TestServer::builder()
                 .http_transport()
                 .build(router)
-                .expect("Failed to create test server")
         } else {
-            TestServer::new(router).expect("Failed to create test server")
+            TestServer::new(router)
         };
 
         (server, temp_file)
     }
 
     async fn create_test_server(content: &str) -> (TestServer, NamedTempFile) {
-        create_test_server_impl(content, false)
+        create_test_server_impl(content, false, DiagramOpts::default())
     }
 
     async fn create_test_server_with_http(content: &str) -> (TestServer, NamedTempFile) {
-        create_test_server_impl(content, true)
+        create_test_server_impl(content, true, DiagramOpts::default())
+    }
+
+    async fn create_test_server_with_mermaid(content: &str) -> (TestServer, NamedTempFile) {
+        create_test_server_impl(
+            content,
+            false,
+            DiagramOpts {
+                mermaid: true,
+                d2: false,
+                latex: false,
+            },
+        )
     }
 
     fn create_directory_server_impl(use_http: bool) -> (TestServer, TempDir) {
@@ -1069,16 +1291,21 @@ mod tests {
             scan_markdown_files(&base_dir, false).expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
-            .expect("Failed to create router");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            is_directory_mode,
+            false,
+            DiagramOpts::default(),
+        )
+        .expect("Failed to create router");
 
         let server = if use_http {
             TestServer::builder()
                 .http_transport()
                 .build(router)
-                .expect("Failed to create test server")
         } else {
-            TestServer::new(router).expect("Failed to create test server")
+            TestServer::new(router)
         };
 
         (server, temp_dir)
@@ -1107,9 +1334,15 @@ mod tests {
         let tracked_files = scan_markdown_files(&base_dir, true).expect("Failed to scan");
         let is_directory_mode = true;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode, true)
-            .expect("Failed to create router");
-        let server = TestServer::new(router).expect("Failed to create test server");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            is_directory_mode,
+            true,
+            DiagramOpts::default(),
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
 
         (server, temp_dir)
     }
@@ -1123,13 +1356,12 @@ mod tests {
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
 
-        assert!(body.contains("<h1>Hello World</h1>"));
-        assert!(body.contains("<strong>bold</strong>"));
+        assert!(content.contains("<h1>Hello World</h1>"));
+        assert!(content.contains("<strong>bold</strong>"));
         assert!(body.contains("theme-toggle"));
-        assert!(body.contains("openThemeModal"));
         assert!(body.contains("--bg-color"));
-        assert!(body.contains("data-theme=\"dark\""));
     }
 
     #[tokio::test]
@@ -1186,13 +1418,14 @@ fn main() {
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
 
-        assert!(body.contains("<table>"));
-        assert!(body.contains("<th>Name</th>"));
-        assert!(body.contains("<td>John</td>"));
-        assert!(body.contains("<del>deleted text</del>"));
-        assert!(body.contains("<pre>"));
-        assert!(body.contains("fn main()"));
+        assert!(content.contains("<table>"));
+        assert!(content.contains("<th>Name</th>"));
+        assert!(content.contains("<td>John</td>"));
+        assert!(content.contains("<del>deleted text</del>"));
+        assert!(content.contains("<pre>"));
+        assert!(content.contains("fn main()"));
     }
 
     #[tokio::test]
@@ -1226,14 +1459,21 @@ fn main() {
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files = vec![md_path];
         let is_directory_mode = false;
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
-            .expect("Failed to create router");
-        let server = TestServer::new(router).expect("Failed to create test server");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            is_directory_mode,
+            false,
+            DiagramOpts::default(),
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
 
         let response = server.get("/").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
-        assert!(body.contains("<img src=\"test.png\" alt=\"Test Image\""));
+        let content = extract_content(&body);
+        assert!(content.contains("<img src=\"test.png\" alt=\"Test Image\""));
 
         let img_response = server.get("/test.png").await;
         assert_eq!(img_response.status_code(), 200);
@@ -1255,9 +1495,15 @@ fn main() {
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files = vec![md_path];
         let is_directory_mode = false;
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false)
-            .expect("Failed to create router");
-        let server = TestServer::new(router).expect("Failed to create test server");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            is_directory_mode,
+            false,
+            DiagramOpts::default(),
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
 
         let response = server.get("/secret.txt").await;
         assert_eq!(response.status_code(), 404);
@@ -1283,13 +1529,14 @@ Regular **markdown** still works.
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
 
-        assert!(body.contains(r#"<div class="highlight">"#));
-        assert!(body.contains(r#"<span style="color: red;">"#));
-        assert!(body.contains("<p>This should be rendered as HTML, not escaped</p>"));
-        assert!(!body.contains("&lt;div"));
-        assert!(!body.contains("&gt;"));
-        assert!(body.contains("<strong>markdown</strong>"));
+        assert!(content.contains(r#"<div class="highlight">"#));
+        assert!(content.contains(r#"<span style="color: red;">"#));
+        assert!(content.contains("<p>This should be rendered as HTML, not escaped</p>"));
+        assert!(!content.contains("&lt;div"));
+        assert!(!content.contains("&gt;"));
+        assert!(content.contains("<strong>markdown</strong>"));
     }
 
     #[tokio::test]
@@ -1313,29 +1560,28 @@ console.log("Hello World");
 ```
 "#;
 
-        let (server, _temp_file) = create_test_server(markdown_content).await;
+        let (server, _temp_file) = create_test_server_with_mermaid(markdown_content).await;
 
         let response = server.get("/").await;
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
+        let data = extract_mdrv_data(&body);
 
-        assert!(body.contains(r#"class="language-mermaid""#));
-        assert!(body.contains("graph TD"));
+        assert!(content.contains(r#"class="language-mermaid""#));
+        assert!(content.contains("graph TD"));
 
-        let has_raw_content = body.contains("A[Start] --> B{Decision}");
-        let has_encoded_content = body.contains("A[Start] --&gt; B{Decision}");
+        let has_raw_content = content.contains("A[Start] --> B{Decision}");
+        let has_encoded_content = content.contains("A[Start] --&gt; B{Decision}");
         assert!(
             has_raw_content || has_encoded_content,
-            "Expected mermaid content not found in body"
+            "Expected mermaid content not found"
         );
 
-        assert!(body.contains(r#"<script src="/mermaid.min.js"></script>"#));
-        assert!(body.contains("function initMermaid()"));
-        assert!(body.contains("function transformMermaidCodeBlocks()"));
-        assert!(body.contains("function getMermaidTheme()"));
-        assert!(body.contains(r#"class="language-javascript""#));
-        assert!(body.contains("console.log"));
+        assert_eq!(data["mermaidEnabled"], true);
+        assert!(content.contains(r#"class="language-javascript""#));
+        assert!(content.contains("console.log"));
     }
 
     #[tokio::test]
@@ -1355,17 +1601,18 @@ echo "Regular code block"
 Just regular markdown content.
 "#;
 
-        let (server, _temp_file) = create_test_server(markdown_content).await;
+        let (server, _temp_file) = create_test_server_with_mermaid(markdown_content).await;
 
         let response = server.get("/").await;
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
+        let data = extract_mdrv_data(&body);
 
-        assert!(!body.contains(r#"<script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.min.js"></script>"#));
-        assert!(body.contains("function initMermaid()"));
-        assert!(body.contains(r#"class="language-javascript""#));
-        assert!(body.contains(r#"class="language-bash""#));
+        assert_eq!(data["mermaidEnabled"], false);
+        assert!(content.contains(r#"class="language-javascript""#));
+        assert!(content.contains(r#"class="language-bash""#));
     }
 
     #[tokio::test]
@@ -1392,28 +1639,127 @@ classDiagram
 ```
 "#;
 
-        let (server, _temp_file) = create_test_server(markdown_content).await;
+        let (server, _temp_file) = create_test_server_with_mermaid(markdown_content).await;
 
         let response = server.get("/").await;
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
+        let data = extract_mdrv_data(&body);
 
-        let mermaid_occurrences = body.matches(r#"class="language-mermaid""#).count();
+        let mermaid_occurrences = content.matches(r#"class="language-mermaid""#).count();
         assert_eq!(mermaid_occurrences, 3);
 
-        assert!(body.contains("graph LR"));
-        assert!(body.contains("sequenceDiagram"));
-        assert!(body.contains("classDiagram"));
+        assert!(content.contains("graph LR"));
+        assert!(content.contains("sequenceDiagram"));
+        assert!(content.contains("classDiagram"));
 
-        assert!(body.contains("A --&gt; B") || body.contains("A --> B"));
-        assert!(body.contains("Alice-&gt;&gt;Bob") || body.contains("Alice->>Bob"));
-        assert!(body.contains("Animal &lt;|-- Duck") || body.contains("Animal <|-- Duck"));
+        assert!(content.contains("A --&gt; B") || content.contains("A --> B"));
+        assert!(content.contains("Alice-&gt;&gt;Bob") || content.contains("Alice->>Bob"));
+        assert!(content.contains("Animal &lt;|-- Duck") || content.contains("Animal <|-- Duck"));
 
-        let script_occurrences = body
-            .matches(r#"<script src="/mermaid.min.js"></script>"#)
-            .count();
-        assert_eq!(script_occurrences, 1);
+        assert_eq!(data["mermaidEnabled"], true);
+    }
+
+    #[tokio::test]
+    async fn test_diagrams_disabled_by_default() {
+        // Without --with-mermaid, a mermaid block must not trigger the flag.
+        let (server, _temp_file) = create_test_server("# H\n\n```mermaid\nA --> B\n```\n").await;
+        let body = server.get("/").await.text();
+        assert_eq!(extract_mdrv_data(&body)["mermaidEnabled"], false);
+    }
+
+    #[tokio::test]
+    async fn test_d2_block_degrades_gracefully_without_binary() {
+        // A d2 block renders either as inline SVG (d2 installed) or as a plain
+        // code block (d2 absent). Both outcomes are acceptable.
+        let markdown_content = "# D2 Test\n\n```d2\nx -> y\n```\n";
+        let (server, _temp_file) = create_test_server_impl(
+            markdown_content,
+            false,
+            DiagramOpts {
+                mermaid: false,
+                d2: true,
+                latex: false,
+            },
+        );
+
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("<svg") || content.contains(r#"class="language-d2""#),
+            "d2 block should produce SVG or fall back to a code block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_latex_inline_renders_svg() {
+        let markdown_content = "Inline math: $x^2 + y^2$\n";
+        let (server, _temp_file) = create_test_server_impl(
+            markdown_content,
+            false,
+            DiagramOpts {
+                mermaid: false,
+                d2: false,
+                latex: true,
+            },
+        );
+
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("<svg"),
+            "inline math should produce an SVG"
+        );
+        assert!(
+            content.contains("latex-inline"),
+            "inline math should be wrapped in a latex-inline span"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_latex_display_renders_svg() {
+        let markdown_content = "Block math:\n\n$$\n\\sum_{i=1}^n i = \\frac{n(n+1)}{2}
+$$\n";
+        let (server, _temp_file) = create_test_server_impl(
+            markdown_content,
+            false,
+            DiagramOpts {
+                mermaid: false,
+                d2: false,
+                latex: true,
+            },
+        );
+
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("<svg"),
+            "display math should produce an SVG"
+        );
+        assert!(
+            content.contains("latex-display"),
+            "display math should be wrapped in a latex-display div"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_latex_not_rendered_without_flag() {
+        // Without --with-latex, $...$ delimiters appear as literal text.
+        let markdown_content = "Price is $5 and $10 each\n";
+        let (server, _temp_file) = create_test_server(markdown_content).await;
+
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            !content.contains("latex-inline"),
+            "no latex-inline should appear without --with-latex"
+        );
+        assert!(
+            !content.contains("<svg"),
+            "no SVG should appear without --with-latex"
+        );
     }
 
     #[tokio::test]
@@ -1467,20 +1813,23 @@ classDiagram
         let response1 = server.get("/test1.md").await;
         assert_eq!(response1.status_code(), 200);
         let body1 = response1.text();
-        assert!(body1.contains("<h1>Test 1</h1>"));
-        assert!(body1.contains("Content of test1"));
+        let content1 = extract_content(&body1);
+        assert!(content1.contains("<h1>Test 1</h1>"));
+        assert!(content1.contains("Content of test1"));
 
         let response2 = server.get("/test2.markdown").await;
         assert_eq!(response2.status_code(), 200);
         let body2 = response2.text();
-        assert!(body2.contains("<h1>Test 2</h1>"));
-        assert!(body2.contains("Content of test2"));
+        let content2 = extract_content(&body2);
+        assert!(content2.contains("<h1>Test 2</h1>"));
+        assert!(content2.contains("Content of test2"));
 
         let response3 = server.get("/test3.md").await;
         assert_eq!(response3.status_code(), 200);
         let body3 = response3.text();
-        assert!(body3.contains("<h1>Test 3</h1>"));
-        assert!(body3.contains("Content of test3"));
+        let content3 = extract_content(&body3);
+        assert!(content3.contains("<h1>Test 3</h1>"));
+        assert!(content3.contains("Content of test3"));
     }
 
     #[tokio::test]
@@ -1513,10 +1862,10 @@ classDiagram
         let response = server.get("/").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let data = extract_mdrv_data(&body);
 
-        assert!(!body.contains(r#"<nav class="sidebar">"#));
-        assert!(!body.contains("<h3>Files</h3>"));
-        assert!(!body.contains(r#"<ul class="file-list">"#));
+        assert_eq!(data["showNavigation"], false);
+        assert_eq!(data["navItems"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -1526,23 +1875,16 @@ classDiagram
         let response1 = server.get("/test1.md").await;
         assert_eq!(response1.status_code(), 200);
         let body1 = response1.text();
+        let nav1 = extract_nav_json(&body1);
 
-        assert!(
-            body1.contains(r#"href="/test1.md" class="active""#),
-            "test1.md link should have href and class on same line"
-        );
-
-        let active_link_count = body1.matches(r#"class="active""#).count();
-        assert_eq!(active_link_count, 1, "Should have exactly one active link");
+        assert!(nav1.contains("test1.md"), "test1.md should be in nav");
 
         let response2 = server.get("/test2.markdown").await;
         assert_eq!(response2.status_code(), 200);
         let body2 = response2.text();
+        let nav2 = extract_nav_json(&body2);
 
-        assert!(
-            body2.contains(r#"href="/test2.markdown" class="active""#),
-            "test2.markdown link should have href and class on same line"
-        );
+        assert!(nav2.contains("test2.markdown"), "test2.markdown should be in nav");
     }
 
     #[tokio::test]
@@ -1576,8 +1918,9 @@ classDiagram
         let response = server.get("/guide/intro.md").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
-        assert!(body.contains("<h1>Intro</h1>"));
-        assert!(body.contains("Nested content"));
+        let content = extract_content(&body);
+        assert!(content.contains("<h1>Intro</h1>"));
+        assert!(content.contains("Nested content"));
     }
 
     #[tokio::test]
@@ -1587,7 +1930,8 @@ classDiagram
         let response = server.get("/index.md").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
-        assert!(body.contains("<h1>Test 1</h1>"));
+        let content = extract_content(&body);
+        assert!(content.contains("<h1>Test 1</h1>"));
     }
 
     #[tokio::test]
@@ -1597,15 +1941,16 @@ classDiagram
         let response = server.get("/index.md").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let nav = extract_nav_json(&body);
 
         assert!(
-            body.contains("nav-dir"),
-            "sidebar should render directory groups"
+            nav.contains("\"type\":\"dir\""),
+            "nav should have directory groups"
         );
-        assert!(body.contains("guide"));
-        assert!(body.contains("intro.md"));
-        assert!(body.contains(r#"href="/guide/intro.md""#));
-        assert!(body.contains(r#"href="/index.md""#));
+        assert!(nav.contains("guide"), "nav should contain guide dir");
+        assert!(nav.contains("intro.md"), "nav should contain intro.md");
+        assert!(nav.contains("guide/intro.md"), "nav should have guide/intro.md path");
+        assert!(nav.contains("index.md"), "nav should have index.md path");
     }
 
     #[tokio::test]
@@ -1615,11 +1960,9 @@ classDiagram
         let response = server.get("/guide/intro.md").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let nav = extract_nav_json(&body);
 
-        assert!(body.contains(r#"href="/guide/intro.md" class="active""#));
-
-        let active_count = body.matches(r#"class="active""#).count();
-        assert_eq!(active_count, 1, "Should have exactly one active link");
+        assert!(nav.contains("guide/intro.md"), "guide/intro.md should be in nav");
     }
 
     #[tokio::test]
@@ -1665,17 +2008,19 @@ classDiagram
         let response = server.get("/test1.md").await;
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let nav = extract_nav_json(&body);
 
         assert!(
-            body.contains("test4.md"),
+            nav.contains("test4.md"),
             "New file should appear in navigation"
         );
 
         let new_file_response = server.get("/test4.md").await;
         assert_eq!(new_file_response.status_code(), 200);
         let new_file_body = new_file_response.text();
-        assert!(new_file_body.contains("<h1>Test 4</h1>"));
-        assert!(new_file_body.contains("This is a new file"));
+        let new_content = extract_content(&new_file_body);
+        assert!(new_content.contains("<h1>Test 4</h1>"));
+        assert!(new_content.contains("This is a new file"));
     }
 
     #[tokio::test]
@@ -1806,10 +2151,11 @@ classDiagram
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
 
-        assert!(!body.contains("title: Test Post"));
-        assert!(!body.contains("author: Name"));
-        assert!(body.contains("<h1>Test Post</h1>"));
+        assert!(!content.contains("title: Test Post"));
+        assert!(!content.contains("author: Name"));
+        assert!(content.contains("<h1>Test Post</h1>"));
     }
 
     #[tokio::test]
@@ -1820,9 +2166,10 @@ classDiagram
 
         assert_eq!(response.status_code(), 200);
         let body = response.text();
+        let content = extract_content(&body);
 
-        assert!(!body.contains("title = \"Test Post\""));
-        assert!(body.contains("<h1>Test Post</h1>"));
+        assert!(!content.contains("title = \"Test Post\""));
+        assert!(content.contains("<h1>Test Post</h1>"));
     }
 
     #[tokio::test]

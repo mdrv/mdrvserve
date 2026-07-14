@@ -26,7 +26,7 @@ mdrvserve is a **markdown preview server built as a companion for AI coding
 agents**. It runs locally during a coding session, renders markdown to HTML in
 the browser, and live-reloads as files change. Concretely, it does four things:
 
-1. **Serves rendered markdown over HTTP.** One file or a whole directory, with GFM (tables, task lists, code blocks) and Mermaid diagram support out of the box.
+1. **Serves rendered markdown over HTTP.** One file or a whole directory, with GFM (tables, task lists, code blocks) and opt-in D2 (server-side), Mermaid (client-side), and LaTeX math (server-side) support.
 2. **Live-reloads on save.** A file watcher re-renders changed files and signals every connected browser to reload over WebSocket. The core loop is: an agent writes, a human reads.
 3. **Presents a directory as a navigable tree.** In directory mode a sidebar lists every `.md`/`.markdown` file; with `--recursive` nested subdirectories become collapsible groups.
 4. **Stays out of the way.** Zero config, zero runtime dependencies, one static binary. `mdrvserve file.md` just works.
@@ -54,7 +54,7 @@ All tracked files are rendered to HTML on startup and re-rendered on change. Ser
 
 ### 3. Server-side logic, minimal client JS
 
-Markdown rendering, file tracking, the navigation tree, and active-file highlighting all run server-side. The browser runs two tiny scripts: theme selection and a WebSocket reload listener. No SPA, no build step, no client framework.
+Markdown rendering, file tracking, and the navigation tree all run server-side; the browser receives fully rendered HTML. A thin Svelte 5 frontend handles UI chrome — theme picker, zoom slider, sidebar toggle, and the WebSocket reload listener — and hydrates from a JSON blob injected at serve time. No routing, no fetch calls, no client-side markdown parsing.
 
 ### 4. Ephemeral by design
 
@@ -72,7 +72,7 @@ Single-file and directory modes share a single router and state shape. Mode is a
 
 mdrvserve serves one role, sometimes split across two actors:
 
-| Role             | What they want from mdrvserve                                           |
+| Role             | What they want from mdrvserve                                         |
 | ---------------- | --------------------------------------------------------------------- |
 | **Agent**        | Emit markdown files; expect them to appear rendered without ceremony. |
 | **Human reader** | Watch rendered output update live as the agent works; browse a tree.  |
@@ -93,5 +93,5 @@ Explicitly deferred:
 - Deployable/static output (a site generator's job).
 - Authentication, TLS, or multi-user serving.
 - Full-text search, backlinks, or cross-session persistence.
-- A client-side framework or SPA.
-- Configurable rendering pipelines. GFM + Mermaid + themes is the whole surface.
+- A client-side markdown parser or fetch-based content loading.
+- Configurable rendering pipelines. GFM + opt-in D2/Mermaid/LaTeX + themes is the whole surface.

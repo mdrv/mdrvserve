@@ -21,14 +21,14 @@ jobs:
         run: |
           # Get all commits in this PR
           commits=$(git log --format=%H origin/${{ github.event.pull_request.base.ref }}..HEAD)
-          
+
           echo "Checking commit messages for conventional commit format..."
           echo ""
-          
+
           failed=0
           for commit in $commits; do
             msg=$(git log --format=%s -n 1 $commit)
-            
+
             # Check if message matches conventional commit format
             # Format: type(optional-scope): description
             # Types: feat, fix, docs, chore, refactor, test, ci, perf, style, revert
@@ -40,7 +40,7 @@ jobs:
               failed=1
             fi
           done
-          
+
           echo ""
           if [ $failed -eq 1 ]; then
             echo "❌ One or more commits do not follow conventional commit format."
@@ -55,5 +55,5 @@ jobs:
             echo "  chore(deps): update axum to 0.7"
             exit 1
           fi
-          
+
           echo "✅ All commits follow conventional commit format"

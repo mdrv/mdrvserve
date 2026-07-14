@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>mdrvserve</title>
+	<script type="application/json" id="__mdrv-data">__MDRV_DATA_PLACEHOLDER__</script>
+	<script>
+		(function () {
+			var theme = localStorage.getItem('theme') || 'catppuccin-mocha';
+			document.documentElement.setAttribute('data-theme', theme);
+			document.documentElement.classList.add('theme-initialized');
+			var textZoom = localStorage.getItem('text-zoom');
+			if (textZoom) {
+				document.documentElement.style.setProperty('--text-zoom', textZoom);
+			}
+			if (localStorage.getItem('sidebar-collapsed') === 'true') {
+				document.documentElement.classList.add('sidebar-collapsed');
+			}
+		})();
+	</script>
+</head>
+<body>
+	<div id="app"></div>
+	<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

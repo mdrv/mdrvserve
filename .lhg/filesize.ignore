@@ -1,0 +1,8 @@
+# .lhg/filesize.ignore — gitignore-style patterns for the file-size guard.
+# One pattern per line. "#" starts a comment; blank lines are ignored.
+# Trailing "/" matches a directory tree; "*"/"?"/"[...]" are globs.
+# An empty file means: nothing is ignored. Docs: 60-hooks.md
+
+# dist/bundle.js
+# vendor/
+# *.woff

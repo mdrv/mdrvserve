@@ -21,8 +21,8 @@ are watched, and whether the sidebar shows.
 
 ## At a glance
 
-| Mode                  | Invocation         | Watches             | Sidebar    | Keys          |
-| --------------------- | ------------------ | ------------------- | ---------- | ------------- |
+| Mode                  | Invocation           | Watches             | Sidebar    | Keys          |
+| --------------------- | -------------------- | ------------------- | ---------- | ------------- |
 | Single-file           | `mdrvserve file.md`  | parent directory    | no         | filename only |
 | Directory (flat)      | `mdrvserve docs/`    | immediate directory | yes        | filename only |
 | Directory (recursive) | `mdrvserve docs/ -r` | directory + subdirs | yes (tree) | relative path |
@@ -77,14 +77,13 @@ docs/
 
 ## How the sidebar tree is built
 
-The navigation is rendered **server-side** as an HTML fragment from the sorted
-list of keys, then handed to the template as already-safe HTML (`nav_html`).
-There is no client-side tree logic.
+The navigation tree is built **server-side** from the sorted list of keys and
+serialized to JSON (`navItems`), then rendered client-side by the Svelte
+sidebar component. There is no server-side HTML generation for the tree.
 
-- `NavNode` is either a `File { name, full_path }` or a `Dir { name, children }`.
+- `NavNode` is a tagged enum serialised as `{ type: "file"|"dir", ... }`; a `File` carries `name`, `fullPath`, and `abbr` (a 2-char abbreviation for collapsed-circle display); a `Dir` carries `name` and `children`.
 - Each key is split on `/` and inserted into the tree (`nav_insert`).
-- Directories render as `<li class="nav-dir"><span class="nav-dir-name">…</span><ul class="file-list">…</ul></li>`; files render as `<li><a href="/{key}">…</a></li>`.
-- The entry matching the current file gets `class="active"`.
+- The Svelte `SidebarList` component recurses through the children; the active file is highlighted client-side by matching the current URL.
 
 Because the tree is derived purely from keys, a flat directory renders exactly
 as it always did — the recursive mode is a strict superset, never a visual

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 env:
@@ -28,31 +28,31 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-    - name: Report Rust version
-      run: rustup show
+      - name: Report Rust version
+        run: rustup show
 
-    - name: Install target
-      run: rustup target add ${{ matrix.target }}
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Check formatting
-      run: cargo fmt --check
+      - name: Check formatting
+        run: cargo fmt --check
 
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
 
-    - name: Run tests
-      run: cargo test --target ${{ matrix.target }}
+      - name: Run tests
+        run: cargo test --target ${{ matrix.target }}
 
-    - name: Build release
-      run: cargo build --release --target ${{ matrix.target }}
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}

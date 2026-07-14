@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 mod app;
 
-use app::{scan_markdown_files, serve_markdown};
+use app::{scan_markdown_files, serve_markdown, DiagramOpts};
 
 #[derive(Parser)]
 #[command(name = "mdrvserve")]
@@ -29,6 +29,18 @@ struct Args {
     /// Watch subdirectories recursively (directory mode only)
     #[arg(short, long)]
     recursive: bool,
+
+    /// Render Mermaid diagrams client-side (lazy-loads the bundled JS)
+    #[arg(long = "with-mermaid")]
+    with_mermaid: bool,
+
+    /// Render D2 diagrams server-side via the `d2` binary (inlines SVG)
+    #[arg(long = "with-d2")]
+    with_d2: bool,
+
+    /// Render LaTeX math (inline `$...$` and block `$$...$$`) to SVG via RaTeX
+    #[arg(long = "with-latex")]
+    with_latex: bool,
 }
 
 #[tokio::main]
@@ -64,6 +76,11 @@ async fn main() -> Result<()> {
         args.hostname,
         args.port,
         args.open,
+        DiagramOpts {
+            mermaid: args.with_mermaid,
+            d2: args.with_d2,
+            latex: args.with_latex,
+        },
     )
     .await?;
 
