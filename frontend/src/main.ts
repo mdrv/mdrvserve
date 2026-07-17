@@ -10,6 +10,7 @@ try {
 } catch {
 	data = {
 		content: '<p>Error: invalid data</p>',
+		sourceContent: '',
 		navItems: [],
 		pageTitle: 'mdrvserve',
 		showNavigation: false,

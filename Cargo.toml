@@ -1,6 +1,6 @@
 [package]
 name = "mdrvserve"
-version = "267.0.0"
+version = "267.1.0"
 categories = ["command-line-utilities", "web-programming"]
 documentation = "https://github.com/mdrv/mdrvserve#readme"
 edition = "2021"
@@ -30,16 +30,16 @@ clap = { version = "4.6.1", features = ["derive"] }
 futures-util = "0.3.32"
 markdown = "1.0"
 notify = "8.2.0"
+ratex-layout = "0.1.13"
+ratex-parser = "0.1.13"
+ratex-svg = { version = "0.1.13", features = ["embed-fonts"] }
+ratex-types = "0.1.13"
 regex = "1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "fs", "time"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["fs", "cors"] }
-ratex-parser = "0.1.13"
-ratex-layout = "0.1.13"
-ratex-svg = { version = "0.1.13", features = ["embed-fonts"] }
-ratex-types = "0.1.13"
 
 [profile.release]
 strip = true

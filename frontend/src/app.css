@@ -292,6 +292,69 @@ body {
 	cursor: e-resize;
 }
 
+/* Sidebar Filter */
+.sidebar-filter-btn {
+	position: fixed;
+	top: 20px;
+	left: 64px;
+	background: transparent;
+	border: none;
+	border-radius: 6px;
+	padding: 8px;
+	cursor: pointer;
+	color: var(--text-color);
+	width: 40px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 102;
+	opacity: 0.5;
+	transition:
+		opacity 0.2s var(--transition-timing),
+		background 0.2s var(--transition-timing);
+}
+
+.sidebar-filter-btn:hover,
+.sidebar-filter-btn:focus-visible {
+	opacity: 1;
+	background: var(--border-color-light);
+	outline: none;
+}
+
+.sidebar-filter-btn[aria-expanded="true"] {
+	opacity: 1;
+	color: var(--link-color);
+}
+
+.sidebar-filter-btn.filter-active {
+	opacity: 1;
+	color: #2ea043;
+}
+
+.sidebar-collapsed .sidebar-filter-btn {
+	display: none;
+}
+
+.sidebar-filter-input {
+	position: fixed;
+	top: 64px;
+	left: 10px;
+	width: calc(var(--sidebar-width) - 20px);
+	padding: 6px 10px;
+	border: 1px solid var(--border-color-light);
+	border-radius: 6px;
+	background: var(--bg-color);
+	color: var(--text-color);
+	font-size: 13px;
+	z-index: 101;
+}
+
+.sidebar-filter-input:focus {
+	outline: none;
+	border-color: var(--link-color);
+}
+
 /* Top Controls */
 .top-controls {
 	position: fixed;
@@ -324,9 +387,24 @@ body {
 }
 
 .theme-toggle:hover,
-.theme-toggle:focus-visible {
+.theme-toggle:focus-visible,
+.source-btn:hover,
+.source-btn:focus-visible {
 	background: var(--border-color-light);
 	outline: none;
+}
+
+.source-btn {
+	background: var(--code-bg);
+	border: 1px solid var(--border-color-light);
+	border-radius: 6px;
+	padding: 8px 12px;
+	cursor: pointer;
+	font-size: 14px;
+	color: var(--text-color);
+	transition:
+		background 0.2s var(--transition-timing),
+		border-color var(--transition-speed) var(--transition-timing);
 }
 
 .zoom-control {
@@ -441,6 +519,77 @@ body {
 	height: 16px;
 	border-radius: 3px;
 	border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Source Modal */
+.source-backdrop {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100vw;
+	height: 100vh;
+	background: rgba(0, 0, 0, 0.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 200;
+}
+
+.source-modal {
+	background: var(--bg-color);
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	width: 90vw;
+	max-width: 1000px;
+	height: 85vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.source-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--border-color);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text-color);
+}
+
+.source-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.source-copy-btn,
+.source-close-btn {
+	background: var(--code-bg);
+	border: 1px solid var(--border-color-light);
+	border-radius: 4px;
+	padding: 4px 10px;
+	cursor: pointer;
+	font-size: 13px;
+	color: var(--text-color);
+}
+
+.source-copy-btn:hover,
+.source-close-btn:hover {
+	background: var(--border-color-light);
+}
+
+.source-body {
+	flex: 1;
+	overflow: auto;
+	margin: 0;
+	padding: 16px;
+	font-size: 13px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+	color: var(--text-color);
+	background: var(--code-bg);
 }
 
 .theme-card-sample {

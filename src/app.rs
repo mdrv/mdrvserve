@@ -59,17 +59,21 @@ enum ServerMessage {
     Reload,
 }
 
-pub(crate) fn scan_markdown_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
+pub(crate) fn scan_markdown_files(
+    dir: &Path,
+    recursive: bool,
+    include_html: bool,
+) -> Result<Vec<PathBuf>> {
     let mut md_files = Vec::new();
 
     if recursive {
-        collect_markdown_recursive(dir, &mut md_files)?;
+        collect_markdown_recursive(dir, &mut md_files, include_html)?;
     } else {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && is_markdown_file(&path) {
+            if path.is_file() && is_tracked_file(&path, include_html) {
                 md_files.push(path);
             }
         }
@@ -80,14 +84,18 @@ pub(crate) fn scan_markdown_files(dir: &Path, recursive: bool) -> Result<Vec<Pat
     Ok(md_files)
 }
 
-fn collect_markdown_recursive(dir: &Path, md_files: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_markdown_recursive(
+    dir: &Path,
+    md_files: &mut Vec<PathBuf>,
+    include_html: bool,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_dir() {
-            collect_markdown_recursive(&path, md_files)?;
-        } else if path.is_file() && is_markdown_file(&path) {
+            collect_markdown_recursive(&path, md_files, include_html)?;
+        } else if path.is_file() && is_tracked_file(&path, include_html) {
             md_files.push(path);
         }
     }
@@ -112,10 +120,26 @@ fn is_markdown_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn is_html_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
+        })
+        .unwrap_or(false)
+}
+
+/// Returns true if the file should be tracked. Markdown files are always
+/// tracked; HTML files are tracked only when `include_html` is set.
+fn is_tracked_file(path: &Path, include_html: bool) -> bool {
+    is_markdown_file(path) || (include_html && is_html_file(path))
+}
+
 struct TrackedFile {
     path: PathBuf,
     last_modified: SystemTime,
     html: String,
+    source: String,
 }
 
 struct MarkdownState {
@@ -125,6 +149,7 @@ struct MarkdownState {
     mermaid_enabled: bool,
     d2_enabled: bool,
     latex_enabled: bool,
+    include_html: bool,
     change_tx: broadcast::Sender<ServerMessage>,
 }
 
@@ -134,6 +159,7 @@ impl MarkdownState {
         file_paths: Vec<PathBuf>,
         is_directory_mode: bool,
         opts: DiagramOpts,
+        include_html: bool,
     ) -> Result<Self> {
         let (change_tx, _) = broadcast::channel::<ServerMessage>(16);
 
@@ -142,7 +168,11 @@ impl MarkdownState {
             let metadata = fs::metadata(&file_path)?;
             let last_modified = metadata.modified()?;
             let content = fs::read_to_string(&file_path)?;
-            let html = Self::markdown_to_html(&content, opts)?;
+            let html = if is_html_file(&file_path) {
+                Self::render_html_content(&content, opts)?
+            } else {
+                Self::markdown_to_html(&content, opts)?
+            };
 
             let key = relative_key(&file_path, &base_dir);
 
@@ -152,6 +182,7 @@ impl MarkdownState {
                     path: file_path,
                     last_modified,
                     html,
+                    source: content,
                 },
             );
         }
@@ -163,6 +194,7 @@ impl MarkdownState {
             mermaid_enabled: opts.mermaid,
             d2_enabled: opts.d2,
             latex_enabled: opts.latex,
+            include_html,
             change_tx,
         })
     }
@@ -181,7 +213,12 @@ impl MarkdownState {
         let opts = self.opts();
         if let Some(tracked) = self.tracked_files.get_mut(filename) {
             let content = fs::read_to_string(&tracked.path)?;
-            tracked.html = Self::markdown_to_html(&content, opts)?;
+            tracked.html = if is_html_file(&tracked.path) {
+                Self::render_html_content(&content, opts)?
+            } else {
+                Self::markdown_to_html(&content, opts)?
+            };
+            tracked.source = content;
             tracked.last_modified = fs::metadata(&tracked.path)?.modified()?;
         }
         Ok(())
@@ -197,13 +234,19 @@ impl MarkdownState {
 
         let metadata = fs::metadata(&file_path)?;
         let content = fs::read_to_string(&file_path)?;
+        let html = if is_html_file(&file_path) {
+            Self::render_html_content(&content, opts)?
+        } else {
+            Self::markdown_to_html(&content, opts)?
+        };
 
         self.tracked_files.insert(
             key,
             TrackedFile {
                 path: file_path,
                 last_modified: metadata.modified()?,
-                html: Self::markdown_to_html(&content, opts)?,
+                html,
+                source: content,
             },
         );
 
@@ -242,16 +285,29 @@ impl MarkdownState {
 
         Ok(html_body)
     }
+
+    /// Process raw HTML content with D2 and LaTeX post-processing (no markdown
+    /// conversion). Used for `.html`/`.htm` files served via `--include-html`.
+    fn render_html_content(content: &str, opts: DiagramOpts) -> Result<String> {
+        let mut html = content.to_string();
+
+        if opts.d2 {
+            html = render_d2_blocks(&html);
+        }
+
+        if opts.latex {
+            html = render_latex_blocks(&html);
+        }
+
+        Ok(html)
+    }
 }
 
-/// Handles a markdown file that may have been created or modified.
-/// Refreshes tracked files or adds new files in directory mode, sending reload notifications.
 async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
-    if !is_markdown_file(path) {
+    let mut state_guard = state.lock().await;
+    if !is_tracked_file(path, state_guard.include_html) {
         return;
     }
-
-    let mut state_guard = state.lock().await;
 
     // Identify the file by its path relative to the served base directory.
     let key = relative_key(path, &state_guard.base_dir);
@@ -304,7 +360,7 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
         }
         _ => {
             for path in &event.paths {
-                if is_markdown_file(path) {
+                if is_markdown_file(path) || is_html_file(path) {
                     match event.kind {
                         notify::EventKind::Create(_)
                         | notify::EventKind::Modify(notify::event::ModifyKind::Data(_)) => {
@@ -340,6 +396,7 @@ fn new_router(
     is_directory_mode: bool,
     is_recursive: bool,
     opts: DiagramOpts,
+    include_html: bool,
 ) -> Result<Router> {
     let base_dir = base_dir.canonicalize()?;
 
@@ -348,6 +405,7 @@ fn new_router(
         tracked_files,
         is_directory_mode,
         opts,
+        include_html,
     )?));
 
     let watcher_state = state.clone();
@@ -419,6 +477,7 @@ pub(crate) async fn serve_markdown(
     port: u16,
     open: bool,
     opts: DiagramOpts,
+    include_html: bool,
 ) -> Result<()> {
     let hostname = hostname.as_ref();
 
@@ -436,6 +495,7 @@ pub(crate) async fn serve_markdown(
         is_directory_mode,
         is_recursive,
         opts,
+        include_html,
     )?;
 
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
@@ -549,7 +609,11 @@ async fn serve_file(
     AxumPath(filename): AxumPath<String>,
     State(state): State<SharedMarkdownState>,
 ) -> axum::response::Response {
-    if filename.ends_with(".md") || filename.ends_with(".markdown") {
+    if filename.ends_with(".md")
+        || filename.ends_with(".markdown")
+        || filename.ends_with(".html")
+        || filename.ends_with(".htm")
+    {
         let state = state.lock().await;
 
         if !state.tracked_files.contains_key(&filename) {
@@ -763,6 +827,37 @@ fn render_latex_blocks(html: &str) -> String {
         })
         .into_owned();
 
+    // VJudge-style display math: <span/div class='... math math-display ...'>$$CONTENT$$</span/div>
+    // Handles single/double quotes and multi-line class attributes.
+    let vjudge_display_re = Regex::new(
+        r#"(?s)<(?:span|div)\s[^>]*class\s*=\s*[\'"]\s*[^\'"]*\bmath\s+math-display\b[^\'"]*[\'"][^>]*>\s*\$\$(.*?)\$\$\s*</(?:span|div)>"#,
+    )
+    .expect("static regex");
+    result = vjudge_display_re
+        .replace_all(&result, |caps: &regex::Captures| {
+            let source = unescape_html(caps[1].trim());
+            match render_one_latex(&source, false) {
+                Ok(svg) => format!(r#"<div class="latex-display">{svg}</div>"#),
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .into_owned();
+
+    // VJudge-style inline math: <span class='... math math-inline ...'>$CONTENT$</span>
+    let vjudge_inline_re = Regex::new(
+        r#"(?s)<(?:span|code)\s[^>]*class\s*=\s*[\'"]\s*[^\'"]*\bmath\s+math-inline\b[^\'"]*[\'"][^>]*>\s*\$(.*?)\$\s*</(?:span|code)>"#,
+    )
+    .expect("static regex");
+    result = vjudge_inline_re
+        .replace_all(&result, |caps: &regex::Captures| {
+            let source = unescape_html(caps[1].trim());
+            match render_one_latex(&source, true) {
+                Ok(svg) => format!(r#"<span class="latex-inline">{svg}</span>"#),
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .into_owned();
+
     result
 }
 
@@ -794,8 +889,11 @@ fn render_one_latex(source: &str, inline: bool) -> Result<String> {
 
 fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
     let viewbox_re = regex::Regex::new(r#"viewBox="[\d.\-]+ [\d.\-]+ [\d.\-]+ ([\d.\-]+)""#).unwrap();
-    let dim_re = regex::Regex::new(r#"\s(?:width|height)="[^"]*""#).unwrap();
-    let stripped = dim_re.replace_all(svg, "");
+    let svg_tag_end = svg.find('>').unwrap_or(svg.len());
+    let (head, rest) = svg.split_at(svg_tag_end);
+    let dim_re = regex::Regex::new(r#"\s(?:width|height)=\"[^\"]*\""#).unwrap();
+    let stripped_head = dim_re.replace_all(head, "");
+    let stripped = format!("{stripped_head}{rest}");
     match viewbox_re.captures(&stripped) {
         Some(caps) => {
             let vh: f64 = caps[1].parse().unwrap_or(font_size);
@@ -807,8 +905,8 @@ fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
 }
 
 async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCode, Html<String>) {
-    let content = match state.tracked_files.get(current_file) {
-        Some(tracked) => tracked.html.as_str(),
+    let (content, source) = match state.tracked_files.get(current_file) {
+        Some(tracked) => (tracked.html.as_str(), tracked.source.as_str()),
         None => return (StatusCode::NOT_FOUND, Html("File not found".to_string())),
     };
 
@@ -828,6 +926,7 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
 
     let data = serde_json::json!({
         "content": content,
+        "sourceContent": source,
         "navItems": nav_items,
         "pageTitle": page_title,
         "showNavigation": show_nav,
@@ -1059,7 +1158,7 @@ mod tests {
     fn test_scan_markdown_files_empty_directory() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
 
-        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
         assert_eq!(result.len(), 0);
     }
 
@@ -1074,7 +1173,7 @@ mod tests {
         fs::write(temp_dir.path().join("test.txt"), "text").expect("Failed to write");
         fs::write(temp_dir.path().join("README"), "readme").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 3);
 
@@ -1095,7 +1194,7 @@ mod tests {
         fs::create_dir(&sub_dir).expect("Failed to create subdir");
         fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_name().unwrap().to_str().unwrap(), "root.md");
@@ -1110,7 +1209,7 @@ mod tests {
         fs::write(temp_dir.path().join("test3.Md"), "# Test 3").expect("Failed to write");
         fs::write(temp_dir.path().join("test4.MARKDOWN"), "# Test 4").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 4);
     }
@@ -1130,11 +1229,11 @@ mod tests {
         fs::write(nested_dir.join("deeper.md"), "# Deeper").expect("Failed to write");
 
         // Non-recursive still ignores nested files
-        let flat = scan_markdown_files(temp_dir.path(), false).expect("Failed to scan");
+        let flat = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
         assert_eq!(flat.len(), 1);
 
         // Recursive picks up nested files
-        let result = scan_markdown_files(temp_dir.path(), true).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), true, false).expect("Failed to scan");
         assert_eq!(result.len(), 3);
     }
 
@@ -1242,7 +1341,7 @@ mod tests {
         let tracked_files = vec![canonical_path];
         let is_directory_mode = false;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false, opts)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false, opts, false)
             .expect("Failed to create router");
 
         let server = if use_http {
@@ -1288,7 +1387,7 @@ mod tests {
 
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files =
-            scan_markdown_files(&base_dir, false).expect("Failed to scan markdown files");
+            scan_markdown_files(&base_dir, false, false).expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -1297,6 +1396,7 @@ mod tests {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
         )
         .expect("Failed to create router");
 
@@ -1331,7 +1431,7 @@ mod tests {
             .expect("Failed to write guide/intro.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, true).expect("Failed to scan");
+        let tracked_files = scan_markdown_files(&base_dir, true, false).expect("Failed to scan");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -1340,6 +1440,7 @@ mod tests {
             is_directory_mode,
             true,
             DiagramOpts::default(),
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -1465,6 +1566,7 @@ fn main() {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -1501,6 +1603,7 @@ fn main() {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -1761,6 +1864,75 @@ $$\n";
             "no SVG should appear without --with-latex"
         );
     }
+
+    fn create_html_test_server(content: &str, opts: DiagramOpts) -> (TestServer, NamedTempFile) {
+        let temp_file = Builder::new()
+            .suffix(".html")
+            .tempfile()
+            .expect("Failed to create temp file");
+        fs::write(&temp_file, content).expect("Failed to write temp file");
+
+        let canonical_path = temp_file
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| temp_file.path().to_path_buf());
+
+        let base_dir = canonical_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
+        let tracked_files = vec![canonical_path];
+
+        let router = new_router(base_dir, tracked_files, false, false, opts, true)
+            .expect("Failed to create router");
+        let server = TestServer::new(router);
+        (server, temp_file)
+    }
+
+    #[tokio::test]
+    async fn test_html_file_served_with_content() {
+        let html = "<h1>Hello HTML</h1><p>Raw HTML file</p>";
+        let (server, _temp) = create_html_test_server(html, DiagramOpts::default());
+        // .html single-file: the filename is the temp file's name
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("<h1>Hello HTML</h1>"),
+            "raw HTML should be served: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_html_file_latex_vjudge_inline() {
+        let html = "<p>Width <span class='math math-inline'>$ n \\times n $</span></p>";
+        let opts = DiagramOpts { latex: true, ..Default::default() };
+        let (server, _temp) = create_html_test_server(html, opts);
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("latex-inline"),
+            "VJudge inline math should render: {content}"
+        );
+        assert!(
+            content.contains("<svg"),
+            "SVG should be generated: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_html_file_latex_multiline_class() {
+        // VJudge sometimes splits the class attribute across multiple lines
+        let html = "<span class='\n  math\n  math-inline\n'>$ x $</span>";
+        let opts = DiagramOpts { latex: true, ..Default::default() };
+        let (server, _temp) = create_html_test_server(html, opts);
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("latex-inline"),
+            "multi-line class math should render: {content}"
+        );
+    }
+
 
     #[tokio::test]
     async fn test_mermaid_js_etag_caching() {

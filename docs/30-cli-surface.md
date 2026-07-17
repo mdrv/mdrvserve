@@ -43,7 +43,8 @@ mdrvserve <PATH> [FLAGS]
 | `--recursive`    | `-r`  | bool   | false       | Descend into subdirectories (directory mode only). See [20 — Modes](./20-modes.md).                          |
 | `--with-mermaid` |       | bool   | false       | Lazy-load bundled Mermaid JS for `` ```mermaid `` blocks (client-side).                                      |
 | `--with-d2`      |       | bool   | false       | Render `` ```d2 `` blocks to SVG via the `d2` binary (server-side). See [40 — Rendering](./40-rendering.md). |
-| `--with-latex`   |       | bool   | false       | Render `$...$` and `$$...$$` math to SVG via RaTeX (server-side). See [40 — Rendering](./40-rendering.md).  |
+| `--with-latex`   |       | bool   | false       | Render `$...$` and `$$...$$` math to SVG via RaTeX (server-side). See [40 — Rendering](./40-rendering.md).   |
+| `--include-html` |       | bool   | false       | Track `.html`/`.htm` files in directory mode (with D2/LaTeX post-processing).                                |
 | `--help`         | `-h`  |        |             | Print help.                                                                                                  |
 | `--version`      | `-V`  |        |             | Print version.                                                                                               |
 
@@ -53,6 +54,7 @@ mdrvserve <PATH> [FLAGS]
 - **Mode:** inferred from whether `path` is a file or a directory. There is no `--mode` flag.
 - **Sidebar:** on for directory mode, off for single-file mode. Not a flag.
 - **Diagrams:** opt-in. Mermaid, D2, and LaTeX are off by default; pass `--with-mermaid`, `--with-d2`, or `--with-latex` to enable. Themes are always available.
+- **HTML files:** markdown only by default. Pass `--include-html` to also track `.html`/`.htm` files in directory mode.
 
 ## Port selection
 

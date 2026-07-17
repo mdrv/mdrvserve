@@ -8,6 +8,7 @@ export interface NavItem {
 
 export interface ServerData {
 	content: string
+	sourceContent: string
 	navItems: NavItem[]
 	pageTitle: string
 	showNavigation: boolean

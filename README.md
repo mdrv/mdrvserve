@@ -26,9 +26,11 @@ WebSocket. This is the core interaction: an agent writes, a human reads.
 is not a long-running server and doesn't need to be.
 
 **Agent-friendly content.** GFM (tables, task lists, code blocks), opt-in
-D2 / Mermaid / LaTeX math support, and directory mode with a navigation
-sidebar — including `--recursive` support for nested subdirectories shown
-as collapsible groups.
+D2 / Mermaid / LaTeX math support, HTML file serving (`--include-html`),
+and directory mode with a navigation sidebar — including `--recursive`
+support for nested subdirectories shown as collapsible groups. Sidebar
+filter with wildcard patterns, source view, and scroll persistence round
+out the reading experience.
 
 ## What mdrvserve is not
 
@@ -82,6 +84,9 @@ mdrvserve README.md --hostname 0.0.0.0 --port 8080 --open
 
 # Render D2 diagrams server-side, LaTeX math, or Mermaid client-side
 mdrvserve doc.md --with-d2 --with-latex --with-mermaid
+
+# Include HTML files alongside markdown in directory mode
+mdrvserve docs/ --include-html --with-latex
 ```
 
 ### Single-file vs directory mode

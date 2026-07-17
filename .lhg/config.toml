@@ -4,8 +4,8 @@
 # Docs: docs/10-convention.md
 
 [version]
-scheme = "yym"   # yym | semver | calver (see 30-versioning.md)
-auto_tag = true       # post-commit hook tags version-prefixed commits
+scheme = "yym" # yym | semver | calver (see 30-versioning.md)
+auto_tag = true # post-commit hook tags version-prefixed commits
 auto_changelog = true # post-commit hook appends a changelog entry
 
 [[version.files]]
@@ -14,11 +14,11 @@ kind = "toml"
 
 [changelog]
 # Split entries into per-major files: docs/changelogs/v{MAJOR}.x.md
-series = "major"   # major | minor | single (see 40-changelog.md)
+series = "major" # major | minor | single (see 40-changelog.md)
 
 [filesize]
 max_size = "1MB"
-ignore = ".lhg/filesize.ignore"   # gitignore-style (see 60-hooks.md)
+ignore = ".lhg/filesize.ignore" # gitignore-style (see 60-hooks.md)
 
 [secret]
 enabled = true

@@ -3,10 +3,12 @@
 		textZoom = $bindable(1),
 		theme,
 		onopentheme,
+		onopensource,
 	}: {
 		textZoom: number
 		theme: string
 		onopentheme: () => void
+		onopensource: () => void
 	} = $props()
 
 	let pct = $derived(Math.round(textZoom * 100))
@@ -24,5 +26,8 @@
 		/>
 		<span class='zoom-value'>{pct}%</span>
 	</div>
+	<button class='source-btn' onclick={onopensource} aria-label='View source'>
+		📋
+	</button>
 	<button class='theme-toggle' onclick={onopentheme}>🎨</button>
 </div>

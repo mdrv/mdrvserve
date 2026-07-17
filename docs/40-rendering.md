@@ -62,6 +62,7 @@ transforms `<pre><code class="language-mermaid">` blocks into
 
 Mermaid is heavier than D2 (a ~2.7 MB JS bundle parsed and executed in the
 browser) and has a visible render delay. For server-side rendering without the
+
 ### LaTeX math (server-side, `--with-latex`)
 
 When `--with-latex` is passed, mdrvserve enables the markdown-rs math

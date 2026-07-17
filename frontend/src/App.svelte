@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte'
 	import Sidebar from './lib/Sidebar.svelte'
 	import SidebarToggle from './lib/SidebarToggle.svelte'
+	import SourceModal from './lib/SourceModal.svelte'
 	import ThemeModal from './lib/ThemeModal.svelte'
 	import TopControls from './lib/TopControls.svelte'
 	import type { ServerData } from './lib/types'
@@ -12,12 +13,23 @@
 		localStorage.getItem('sidebar-collapsed') === 'true',
 	)
 	let showThemeModal = $state(false)
+	let showSourceModal = $state(false)
+
 	let theme = $state(
 		document.documentElement.getAttribute('data-theme') || 'catppuccin-mocha',
 	)
 	let textZoom = $state(
 		parseFloat(localStorage.getItem('text-zoom') || '1') || 1,
 	)
+	let sidebarFilter = $state(localStorage.getItem('sidebar-filter') || '')
+	let showFilter = $state(
+		localStorage.getItem('sidebar-filter-open') === 'true',
+	)
+
+	$effect(() => {
+		localStorage.setItem('sidebar-filter', sidebarFilter)
+		localStorage.setItem('sidebar-filter-open', String(showFilter))
+	})
 
 	$effect(() => {
 		document.documentElement.classList.toggle(
@@ -127,16 +139,58 @@
 			collapsed={sidebarCollapsed}
 			onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
 		/>
-		<Sidebar navItems={data.navItems} collapsed={sidebarCollapsed} />
+		<button
+			class='sidebar-filter-btn'
+			class:filter-active={sidebarFilter.trim() !== ''}
+			onclick={() => {
+				showFilter = !showFilter
+				if (showFilter) sidebarCollapsed = false
+			}}
+			aria-label='Filter files'
+			aria-expanded={showFilter}
+		>
+			<svg
+				width='24'
+				height='24'
+				viewBox='0 0 24 24'
+				fill='none'
+				stroke='currentColor'
+				stroke-width='1.5'
+				stroke-linecap='round'
+				stroke-linejoin='round'
+			>
+				<polygon points='22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3'></polygon>
+			</svg>
+		</button>
+		{#if showFilter && !sidebarCollapsed}
+			<input
+				class='sidebar-filter-input'
+				type='text'
+				placeholder='Filter (e.g. day4-*-id.md)'
+				bind:value={sidebarFilter}
+			/>
+		{/if}
+		<Sidebar
+			navItems={data.navItems}
+			collapsed={sidebarCollapsed}
+			filter={sidebarFilter}
+		/>
 	{/if}
 
 	<TopControls
 		bind:textZoom
 		{theme}
 		onopentheme={() => (showThemeModal = true)}
+		onopensource={() => (showSourceModal = true)}
 	/>
 
 	<div id='content'>{@html data.content}</div>
+
+	<SourceModal
+		show={showSourceModal}
+		source={data.sourceContent}
+		onclose={() => (showSourceModal = false)}
+	/>
 
 	<ThemeModal
 		show={showThemeModal}

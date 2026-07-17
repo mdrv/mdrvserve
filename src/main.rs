@@ -41,6 +41,10 @@ struct Args {
     /// Render LaTeX math (inline `$...$` and block `$$...$$`) to SVG via RaTeX
     #[arg(long = "with-latex")]
     with_latex: bool,
+
+    /// Also serve `.html`/`.htm` files alongside markdown (directory mode)
+    #[arg(long = "include-html")]
+    include_html: bool,
 }
 
 #[tokio::main]
@@ -58,7 +62,7 @@ async fn main() -> Result<()> {
         (base_dir, tracked_files, false)
     } else if absolute_path.is_dir() {
         // Directory mode: scan directory for markdown files
-        let tracked_files = scan_markdown_files(&absolute_path, args.recursive)?;
+        let tracked_files = scan_markdown_files(&absolute_path, args.recursive, args.include_html)?;
         if tracked_files.is_empty() {
             anyhow::bail!("No markdown files found in directory");
         }
@@ -81,6 +85,7 @@ async fn main() -> Result<()> {
             d2: args.with_d2,
             latex: args.with_latex,
         },
+        args.include_html,
     )
     .await?;
 
