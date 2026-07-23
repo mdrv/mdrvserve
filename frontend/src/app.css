@@ -674,25 +674,16 @@ pre code {
 	height: auto;
 }
 
-/* Free-flow variant: one continuous sheet, transparent, theme-colored. */
+/* Free-flow variant: reflowable HTML export (semantic HTML + native MathML).
+   Typst injects only MathML-alignment CSS, so this inherits theme colors. */
 .typst-doc-freeflow {
-	color: var(--text-color);
+	color: inherit;
 	text-align: left;
 }
 
-.typst-doc-freeflow .typst-doc-page {
-	display: block;
-}
-
-.typst-doc-freeflow .typst-doc-page svg {
-	width: 100%;
+.typst-doc-freeflow :where(img, svg) {
 	max-width: 100%;
 	height: auto;
-}
-
-/* No page breaks in free-flow mode. */
-.typst-doc-freeflow .typst-page-break {
-	display: none;
 }
 
 .typst-flow-btn {
@@ -719,6 +710,14 @@ pre code {
 	border-color: var(--link-color);
 }
 
+.typst-flow-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.typst-flow-btn:disabled:hover {
+	background: var(--code-bg);
+}
 .typst-page-break {
 	border: none;
 	border-top: 1px solid var(--border-color-light);

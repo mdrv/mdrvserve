@@ -3,6 +3,7 @@
 		textZoom = $bindable(1),
 		typstFlow = $bindable<'paged' | 'freeflow'>('paged'),
 		isTypst = false,
+		freeflowAvailable = false,
 		theme,
 		onopentheme,
 		onopensource,
@@ -10,6 +11,7 @@
 		textZoom: number
 		typstFlow: 'paged' | 'freeflow'
 		isTypst: boolean
+	freeflowAvailable: boolean
 		theme: string
 		onopentheme: () => void
 		onopensource: () => void
@@ -22,10 +24,11 @@
 	{#if isTypst}
 		<button
 			class='typst-flow-btn'
-			class:active={typstFlow === 'freeflow'}
+			class:active={freeflowAvailable && typstFlow === 'freeflow'}
+			disabled={!freeflowAvailable}
 			onclick={() => (typstFlow = typstFlow === 'freeflow' ? 'paged' : 'freeflow')}
 			aria-label='Toggle Typst free-flow layout'
-			title='Layout: {typstFlow}'
+			title={freeflowAvailable ? `Layout: ${typstFlow}` : "`typst` doesn't have HTML feature enabled"}
 		>
 			{typstFlow === 'freeflow' ? '📜' : '📄'}
 		</button>

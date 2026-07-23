@@ -552,6 +552,14 @@ pub(crate) async fn serve_markdown(
         );
     }
 
+    if (opts.typst || include_typst) && typst_available() && !typst_html_available() {
+        eprintln!(
+            "⚠ `typst` is installed but lacks the HTML export feature.\n  \
+             Typst free-flow will be disabled (paged rendering still works).\n  \
+             Install a Typst build compiled with `--features html` (0.13+) to enable it.\n"
+        );
+    }
+
     let first_file = tracked_files.first().cloned();
     let router = new_router(
         base_dir.clone(),
@@ -878,6 +886,33 @@ fn typst_available() -> bool {
     })
 }
 
+/// Whether the installed `typst` supports HTML export (`--features html`).
+/// Probed once by compiling a trivial document and cached for the process.
+fn typst_html_available() -> bool {
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| {
+        let Ok(mut child) = Command::new("typst")
+            .args(["compile", "-", "-", "--format", "html", "--features", "html"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(b"x\n");
+        }
+        child
+            .wait_with_output()
+            .map(|o| {
+                o.status.success()
+                    && String::from_utf8_lossy(&o.stdout).contains("<body")
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Replace every ```typst code block in `html` with an inline SVG rendered by
 /// the `typst` binary. Blocks that fail to render (or when `typst` is absent)
 /// are left untouched so the source remains visible.
@@ -998,16 +1033,11 @@ fn compile_typst_pages(source: &str) -> Result<Vec<String>> {
         .collect()
 }
 
-/// Wrap a list of per-page SVG strings into the `.typst-doc` container. When
-/// `freeflow` is set, the container gets an extra `typst-doc-freeflow` class.
-fn wrap_typst_pages(pages: &[String], freeflow: bool) -> String {
+/// Wrap a list of per-page SVG strings into the `.typst-doc` container
+/// (paged layout: one `.typst-doc-page` per page, separated by a page break).
+fn wrap_typst_pages(pages: &[String]) -> String {
     let mut html = String::new();
-    let class = if freeflow {
-        r#"typst-doc typst-doc-freeflow"#
-    } else {
-        r#"typst-doc"#
-    };
-    html.push_str(&format!(r#"<div class="{class}">"#));
+    html.push_str(r#"<div class="typst-doc">"#);
     for (i, svg) in pages.iter().enumerate() {
         if i > 0 {
             html.push_str(r#"<hr class="typst-page-break">"#);
@@ -1036,43 +1066,63 @@ fn render_typst_document(content: &str) -> Result<String> {
         return Ok(source_fallback());
     }
 
-    Ok(wrap_typst_pages(&pages, false))
+    Ok(wrap_typst_pages(&pages))
 }
 
-/// Compile a `.typ` document in "free-flow" mode: the page is forced to a
-/// single growing sheet (`height: auto`), the white page background is
-/// dropped (`fill: none`), and black glyphs are recolored to `currentColor`
-/// so they follow the active theme. Because Typst is a paged typesetter the
-/// result is still fixed-layout SVG (text does not reflow to the viewport),
-/// but page breaks are eliminated and the background/text inherit the
-/// theme. Falls back to a plain source listing when `typst` is absent or
-/// compilation fails.
+/// Compile a `.typ` document in "free-flow" mode using Typst's HTML export
+/// (`--format html --features html`). The output is reflowable semantic HTML
+/// with native MathML; Typst injects only MathML-alignment CSS, so the result
+/// inherits mdrvserve's theme colors (dark mode included). Returns an empty
+/// string when the feature is unavailable or compilation fails, which the
+/// frontend uses to disable the free-flow toggle.
 fn render_typst_document_freeflow(content: &str) -> Result<String> {
-    let source_fallback = || {
-        format!(
-            r#"<pre><code class="language-typst">{}</code></pre>"#,
-            escape_html(content)
-        )
-    };
-
-    // Match the reading column (~900px = 675pt). `#set` applies forward, so a
-    // user's own later `#set page(...)` may override these fields; free-flow is
-    // best-effort by design.
-    let transformed = format!(
-        "#set page(width: 675pt, height: auto, fill: none, margin: (x: 1.5em, y: 1.4em))\n{content}"
-    );
-
-    let pages = compile_typst_pages(&transformed)?;
-    if pages.is_empty() {
-        return Ok(source_fallback());
+    if !typst_html_available() {
+        return Ok(String::new());
     }
 
-    let recolored: Vec<String> = pages
-        .iter()
-        .map(|svg| svg.replace(r##"fill=\"#000000\""##, r##"fill=\"currentColor\""##))
-        .collect();
+    let mut child = Command::new("typst")
+        .args([
+            "compile", "-", "-", "--format", "html", "--features", "html",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `typst`")?;
 
-    Ok(wrap_typst_pages(&recolored, true))
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(content.as_bytes())?;
+    }
+    child.stdin.take();
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait on `typst`")?;
+
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+
+    let html = String::from_utf8_lossy(&output.stdout);
+    let style_block = Regex::new(r#"(?s)<style[^>]*>.*?</style>"#)
+        .expect("static regex")
+        .find(&html)
+        .map(|m| m.as_str())
+        .unwrap_or("");
+    let body_inner = Regex::new(r#"(?s)<body[^>]*>(.*?)</body>"#)
+        .expect("static regex")
+        .captures(&html)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+
+    if body_inner.trim().is_empty() {
+        return Ok(String::new());
+    }
+
+    Ok(format!(
+        r#"<div class="typst-doc typst-doc-freeflow">{style_block}{body_inner}</div>"#
+    ))
 }
 
 /// Replace every math element (inline `$...$` and block `$$...$$`) in `html`
@@ -2153,21 +2203,22 @@ classDiagram
 
     #[test]
     fn test_typst_document_freeflow_renders_or_degrades() {
-        // Free-flow render either yields the continuous themed sheet (typst
-        // installed) or the plain source listing (typst absent). Both are valid.
+        // Free-flow uses typst's HTML export. When the feature is available
+        // the output is reflowable HTML wrapped in `.typst-doc-freeflow`; when it
+        // is unavailable (or compilation fails) the result is empty and the
+        // frontend disables the toggle. Both are valid.
         let out = render_typst_document_freeflow("#set page(width: 200pt)\nFlow.\n")
             .expect("freeflow render should not error");
         assert!(
-            out.contains(r#"typst-doc-freeflow"#)
-                || out.contains(r#"class="language-typst""#),
-            "freeflow output should be the continuous themed sheet or a source listing"
+            out.contains(r#"typst-doc-freeflow"#) || out.is_empty(),
+            "freeflow output should be themed HTML or empty when unavailable"
         );
     }
 
     #[tokio::test]
     async fn test_typst_document_exposes_freeflow_in_data() {
-        // A served `.typ` file must signal `isTypst` and provide a free-flow
-        // rendering alongside the paged one.
+        // A served `.typ` file must signal `isTypst` and expose the
+        // `contentFreeflow` field (populated when HTML export is available).
         let temp_dir = tempdir().expect("Failed to create temp dir");
         fs::write(temp_dir.path().join("doc.typ"), "Hello Typst.\n")
             .expect("Failed to write doc.typ");
@@ -2189,10 +2240,17 @@ classDiagram
         let data = extract_mdrv_data(&server.get("/").await.text());
         assert_eq!(data["isTypst"], true, ".typ file should set isTypst");
         let freeflow = data["contentFreeflow"].as_str().unwrap_or("");
-        assert!(
-            !freeflow.is_empty(),
-            "contentFreeflow should always be populated for a .typ file"
-        );
+        if typst_html_available() {
+            assert!(
+                !freeflow.is_empty(),
+                "contentFreeflow should be populated when typst HTML export is available"
+            );
+        } else {
+            assert!(
+                freeflow.is_empty(),
+                "contentFreeflow should be empty when typst HTML export is unavailable"
+            );
+        }
     }
 
     #[tokio::test]

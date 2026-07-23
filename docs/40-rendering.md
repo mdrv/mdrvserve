@@ -110,6 +110,21 @@ logs a warning at startup; fenced blocks fall back to plain source listings and
 `.typ` files are served as an escaped `<pre><code class="language-typst">`
 listing. The page still serves.
 
+**Free-flow layout.** On `.typ` source pages, a layout toggle (📄 paged /
+📜 free-flow) appears as the leftmost top control, to the left of the zoom
+slider. Paged is the default. Free-flow re-compiles the document with
+`typst compile - - --format html --features html`, producing reflowable
+semantic HTML (`<h2>`, `<p>`, `<ul>`, `<figure>`, …) with **native MathML**
+for equations, wrapped in `.typst-doc-freeflow`. Typst's emitted `<style>`
+covers MathML alignment only — no colours or fonts — so the HTML inherits the
+active theme (dark mode works; math follows the text colour). Both renderings
+are pre-computed server-side and stored in memory; the toggle swaps between the
+`content` and `contentFreeflow` blobs, with the choice persisted in
+`localStorage`. The toggle is **disabled** — tooltip "`typst` doesn't have
+HTML feature enabled" — when the installed `typst` lacks the `--features html`
+export (probed once via `typst_html_available()`); there is no SVG fallback, a
+startup warning is logged, and paged rendering remains available.
+
 ## Frontend
 
 - **Stack:** [Svelte 5](https://svelte.dev/) + Vite, built to a single
@@ -132,6 +147,8 @@ listing. The page still serves.
 | `pageTitle`      | string        | Filename stem, used for the `<title>`.                               |
 | `showNavigation` | boolean       | Whether to render the sidebar (directory mode only).                 |
 | `mermaidEnabled` | boolean       | Whether the page contains mermaid blocks AND `--with-mermaid` is on. |
+| `isTypst`        | boolean       | Whether the source is a `.typ` file (controls the free-flow toggle).  |
+| `contentFreeflow`| string (HTML) | HTML-export free-flow rendering; empty when the feature is unavailable.|
 
 ## Sidebar tree
 
@@ -160,6 +177,7 @@ constrained to `max-width: 100%`). LaTeX uses `.latex-inline` (inline-block,
 `vertical-align: -0.25ex`) and `.latex-display` (flex, centered). Typst uses
 `.typst-doc` (centered, `max-width: 100%`) with one `.typst-doc-page` per
 rendered page and an `.typst-page-break` rule between pages. Directory
+The free-flow layout uses `.typst-doc-freeflow` (theme-inherited text colour, inline media constrained to `max-width: 100%`).
 entries in the sidebar use the `.nav-dir` / `.nav-dir-name` classes, with
 nested `.file-list` indented. There is no external stylesheet to theme
 separately — keep it server-side and single-file.

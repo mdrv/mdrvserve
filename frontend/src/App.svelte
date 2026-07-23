@@ -56,8 +56,12 @@
 		localStorage.setItem('typst-flow', typstFlow)
 	})
 
+	let freeflowAvailable = $derived(
+		data.isTypst && data.contentFreeflow.trim() !== '',
+	)
+
 	let displayContent = $derived(
-		data.isTypst && typstFlow === 'freeflow'
+		data.isTypst && typstFlow === 'freeflow' && freeflowAvailable
 			? data.contentFreeflow
 			: data.content,
 	)
@@ -194,6 +198,7 @@
 		bind:textZoom
 		bind:typstFlow
 		isTypst={data.isTypst}
+		freeflowAvailable={freeflowAvailable}
 		{theme}
 		onopentheme={() => (showThemeModal = true)}
 		onopensource={() => (showSourceModal = true)}
