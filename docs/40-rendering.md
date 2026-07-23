@@ -17,16 +17,17 @@ tags_excluded: [minijinja, templates]
 
 # Rendering
 
-mdrvserve renders markdown to HTML **once per change**, stores the HTML in the
-tracked file, and reuses it for every request. The request path never parses
-markdown.
+mdrvserve renders markdown to HTML **on first request**, caches the result on
+the tracked file, and reuses it for every later request. A change invalidates
+the cache; the next request re-renders. The request path never parses markdown
+needlessly.
 
 ## Markdown pipeline
 
 - **Library:** [`markdown-rs`](https://github.com/wooorm/markdown-rs) (`markdown` crate), invoked via `markdown::to_html_with_options`.
 - **Options:** `Options::gfm()` — GitHub-Flavoured Markdown. Tables, task lists, strikethrough, and fenced code blocks all render natively.
 - No syntax highlighting pass of its own; code blocks get a `class="language-<lang>"` hook that the frontend CSS can style.
-- The rendered HTML is stored as the `html` field on the `TrackedFile`.
+- The rendered HTML is stored as the `html` field on the `TrackedFile` (`Option<String>`, populated lazily and invalidated on change).
 
 ## Diagram support
 
@@ -118,7 +119,7 @@ semantic HTML (`<h2>`, `<p>`, `<ul>`, `<figure>`, …) with **native MathML**
 for equations, wrapped in `.typst-doc-freeflow`. Typst's emitted `<style>`
 covers MathML alignment only — no colours or fonts — so the HTML inherits the
 active theme (dark mode works; math follows the text colour). Both renderings
-are pre-computed server-side and stored in memory; the toggle swaps between the
+are computed server-side on first view and cached in memory; the toggle swaps between the
 `content` and `contentFreeflow` blobs, with the choice persisted in
 `localStorage`. The toggle is **disabled** — tooltip "`typst` doesn't have
 HTML feature enabled" — when the installed `typst` lacks the `--features html`
@@ -142,7 +143,7 @@ startup warning is logged, and paged rendering remains available.
 
 | Field            | Type          | Purpose                                                              |
 | ---------------- | ------------- | -------------------------------------------------------------------- |
-| `content`        | string (HTML) | The pre-rendered markdown body.                                      |
+| `content`        | string (HTML) | The rendered markdown body, cached on first request.                 |
 | `navItems`       | NavNode[]     | The sidebar tree (directory mode only). Empty when nav is off.       |
 | `pageTitle`      | string        | Filename stem, used for the `<title>`.                               |
 | `showNavigation` | boolean       | Whether to render the sidebar (directory mode only).                 |

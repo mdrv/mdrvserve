@@ -33,8 +33,10 @@ minijinja-embed (changes to `templates/` require a rebuild).
 - **Zero config.** `mdrvserve file.md` must work with no flags or config files.
 - **Non-recursive.** Directory mode watches only the immediate directory, never
   subdirectories. This is intentional.
-- **Pre-rendered in memory.** All tracked files are rendered to HTML on startup
-  and on change. Serving is always from memory.
+- **Rendered on demand, served from memory.** Tracked files are rendered to HTML
+  on first request and cached; cached entries are invalidated on change. Startup
+  only reads file contents and builds the index (no rendering), so large
+  directories boot fast. Serving is always from memory.
 - **Minimal client-side JS.** Most logic is server-side. Client JS handles
   theme selection and WebSocket reload only.
 

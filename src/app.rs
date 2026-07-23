@@ -152,7 +152,7 @@ fn is_typst_file(path: &Path) -> bool {
 struct TrackedFile {
     path: PathBuf,
     last_modified: SystemTime,
-    html: String,
+    html: Option<String>,
     html_freeflow: Option<String>,
     source: String,
 }
@@ -186,29 +186,14 @@ impl MarkdownState {
             let metadata = fs::metadata(&file_path)?;
             let last_modified = metadata.modified()?;
             let content = fs::read_to_string(&file_path)?;
-            let is_typst = is_typst_file(&file_path);
-            let html = if is_typst {
-                render_typst_document(&content)?
-            } else if is_html_file(&file_path) {
-                Self::render_html_content(&content, opts)?
-            } else {
-                Self::markdown_to_html(&content, opts)?
-            };
-            let html_freeflow = if is_typst {
-                Some(render_typst_document_freeflow(&content)?)
-            } else {
-                None
-            };
-
             let key = relative_key(&file_path, &base_dir);
-
             tracked_files.insert(
                 key,
                 TrackedFile {
                     path: file_path,
                     last_modified,
-                    html,
-                    html_freeflow,
+                    html: None,
+                    html_freeflow: None,
                     source: content,
                 },
             );
@@ -239,29 +224,17 @@ impl MarkdownState {
     }
 
     fn refresh_file(&mut self, filename: &str) -> Result<()> {
-        let opts = self.opts();
         if let Some(tracked) = self.tracked_files.get_mut(filename) {
             let content = fs::read_to_string(&tracked.path)?;
-            tracked.html = if is_typst_file(&tracked.path) {
-                render_typst_document(&content)?
-            } else if is_html_file(&tracked.path) {
-                Self::render_html_content(&content, opts)?
-            } else {
-                Self::markdown_to_html(&content, opts)?
-            };
-            tracked.html_freeflow = if is_typst_file(&tracked.path) {
-                Some(render_typst_document_freeflow(&content)?)
-            } else {
-                None
-            };
             tracked.source = content;
+            tracked.html = None;
+            tracked.html_freeflow = None;
             tracked.last_modified = fs::metadata(&tracked.path)?.modified()?;
         }
         Ok(())
     }
 
     fn add_tracked_file(&mut self, file_path: PathBuf) -> Result<()> {
-        let opts = self.opts();
         let key = relative_key(&file_path, &self.base_dir);
 
         if self.tracked_files.contains_key(&key) {
@@ -270,32 +243,59 @@ impl MarkdownState {
 
         let metadata = fs::metadata(&file_path)?;
         let content = fs::read_to_string(&file_path)?;
-        let is_typst = is_typst_file(&file_path);
-        let html = if is_typst {
-            render_typst_document(&content)?
-        } else if is_html_file(&file_path) {
-            Self::render_html_content(&content, opts)?
-        } else {
-            Self::markdown_to_html(&content, opts)?
-        };
-        let html_freeflow = if is_typst {
-            Some(render_typst_document_freeflow(&content)?)
-        } else {
-            None
-        };
-
         self.tracked_files.insert(
             key,
             TrackedFile {
                 path: file_path,
                 last_modified: metadata.modified()?,
-                html,
-                html_freeflow,
+                html: None,
+                html_freeflow: None,
                 source: content,
             },
         );
 
         Ok(())
+    }
+
+    /// Render a file's source into (html, html_freeflow). Markdown and HTML
+    /// are infallible; Typst compilation falls back to a source listing on
+    /// any error so one bad file never breaks serving.
+    fn render_file_content(
+        content: &str,
+        path: &Path,
+        opts: DiagramOpts,
+    ) -> (String, Option<String>) {
+        let is_typst = is_typst_file(path);
+        let html = if is_typst {
+            render_typst_document(content).unwrap_or_default()
+        } else if is_html_file(path) {
+            Self::render_html_content(content, opts).unwrap_or_else(|_| content.to_string())
+        } else {
+            Self::markdown_to_html(content, opts).unwrap_or_default()
+        };
+        let html_freeflow = if is_typst {
+            Some(render_typst_document_freeflow(content).unwrap_or_default())
+        } else {
+            None
+        };
+        (html, html_freeflow)
+    }
+
+    /// Lazily render `filename` on first access; no-op once cached. Rendering
+    /// runs under the state lock — for a single-user preview server the
+    /// per-file cost is acceptable and matches the existing watcher path.
+    fn ensure_rendered(&mut self, filename: &str) {
+        let opts = self.opts();
+        let Some(tracked) = self.tracked_files.get_mut(filename) else {
+            return;
+        };
+        if tracked.html.is_some() {
+            return;
+        }
+        let (html, html_freeflow) =
+            Self::render_file_content(&tracked.source, &tracked.path, opts);
+        tracked.html = Some(html);
+        tracked.html_freeflow = html_freeflow;
     }
 
     fn opts(&self) -> DiagramOpts {
@@ -663,7 +663,7 @@ fn open_browser(url: &str) -> Result<()> {
 }
 
 async fn serve_html_root(State(state): State<SharedMarkdownState>) -> impl IntoResponse {
-    let state = state.lock().await;
+    let mut state = state.lock().await;
 
     let filename = match state.get_sorted_filenames().into_iter().next() {
         Some(name) => name,
@@ -675,6 +675,7 @@ async fn serve_html_root(State(state): State<SharedMarkdownState>) -> impl IntoR
         }
     };
 
+    state.ensure_rendered(&filename);
     render_markdown(&state, &filename).await
 }
 
@@ -688,12 +689,13 @@ async fn serve_file(
         || filename.ends_with(".htm")
         || filename.ends_with(".typ")
     {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
 
         if !state.tracked_files.contains_key(&filename) {
             return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
         }
 
+        state.ensure_rendered(&filename);
         let (status, html) = render_markdown(&state, &filename).await;
         (status, html).into_response()
     } else if is_image_file(&filename) {
@@ -1241,7 +1243,7 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
         Some(t) => t,
         None => return (StatusCode::NOT_FOUND, Html("File not found".to_string())),
     };
-    let content = tracked.html.as_str();
+    let content = tracked.html.as_deref().unwrap_or("");
     let source = tracked.source.as_str();
     let is_typst = is_typst_file(std::path::Path::new(current_file));
     let content_freeflow = tracked.html_freeflow.as_deref().unwrap_or("");

@@ -19,12 +19,12 @@ tags_excluded: []
 
 mdrvserve always works with **a base directory** and **a list of one or more
 tracked files**. The base directory anchors the file watcher and the relative
-keys used to address files; the tracked files hold pre-rendered HTML. Both modes
+keys used to address files; the tracked files cache rendered HTML on first request. Both modes
 reduce to populating those two things.
 
 ```d2
 File System -> File Watcher: notify events
-File Watcher -> MarkdownState: re-render + update
+File Watcher -> MarkdownState: invalidate + update
 File Watcher -> WebSocket: broadcast reload
 HTTP Request -> MarkdownState: lookup key
 MarkdownState -> "Embedded index.html": inject JSON blob
@@ -50,13 +50,14 @@ TrackedFile: {
   shape: class
   path: PathBuf
   last_modified: SystemTime
-  html: String
+  source: String
+  html: Option<String>
 }
 MarkdownState -> TrackedFile: contains
 ```
 
 - **`MarkdownState`** — the shared state, held behind an `Arc<Mutex<...>>`. Knows the base directory, the tracked-files map, whether navigation should show, and the broadcast channel.
-- **`TrackedFile`** — the on-disk path, its last-modified time, and its **pre-rendered HTML**. This is what requests actually serve.
+- **`TrackedFile`** — the on-disk path, its last-modified time, its source text, and its HTML (`Option<String>`, rendered lazily on first request and cached). This is what requests actually serve.
 - **File watcher** — `notify` (`RecommendedWatcher`) feeds FS events into an mpsc channel; a spawned tokio task drains the channel, updates state, and broadcasts a reload.
 - **Router** — a single Axum `Router` shared by both modes (see Routing below).
 - **Frontend bundle** — a Svelte 5 app built to a single `frontend/dist/index.html`, embedded at compile time. Server data is injected into a JSON placeholder at serve time.
@@ -101,13 +102,13 @@ is_directory_mode = true
 1. Canonicalise the path argument; branch on file vs directory.
 2. Single-file → tracked list is `[that file]`, base_dir is its parent.
 3. Directory → `scan_markdown_files(dir, recursive)`; base_dir is the directory itself. Error if no markdown found.
-4. Build `MarkdownState`, render every tracked file to HTML into the map.
+4. Build `MarkdownState`, reading each tracked file's source into the map (no rendering — that happens lazily on first request).
 5. Start the watcher (recursive or not), spawn the event task, bind the HTTP listener, serve.
 
 ### On a file change
 
 1. `notify` emits a create/modify/delete/rename event.
-2. The task computes the file's relative key and re-renders it to HTML.
+2. The task computes the file's relative key and invalidates any cached HTML (re-reading the source).
 3. State is updated — refresh an existing entry, add a new one (directory mode only), or remove a deleted/renamed one.
 4. `ServerMessage::Reload` is broadcast to every connected WebSocket client.
 5. Clients call `window.location.reload()`.

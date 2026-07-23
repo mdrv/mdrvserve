@@ -50,7 +50,7 @@ These docs describe how mdrvserve works inside, how to run it, and the scope it
 
 - **One binary.** `mdrvserve`. No config files, no flags required to start.
 - **Two modes, one code path.** Single-file and directory modes share a unified router; mode is a user intent, not a code fork.
-- **Pre-rendered in memory.** Every tracked file is rendered to HTML on startup and on change. Serving is always from memory, never from disk.
+- **Rendered on demand, served from memory.** Each tracked file is rendered to HTML on first request and cached (invalidated on change), so startup never blocks on rendering. Serving is always from memory, never from disk.
 - **Server-side logic.** Markdown rendering, file tracking, the navigation tree, and reload triggers all live server-side. Client JS handles theme selection and the WebSocket reload only.
 - **Mermaid.** Diagram blocks are detected in rendered HTML and the library is conditionally loaded.
 - **Code in blocks labelled `bash`** are commands you run; blocks labelled `text` are output or structure.

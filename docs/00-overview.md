@@ -27,7 +27,7 @@ agents**. It runs locally during a coding session, renders markdown to HTML in
 the browser, and live-reloads as files change. Concretely, it does four things:
 
 1. **Serves rendered markdown over HTTP.** One file or a whole directory, with GFM (tables, task lists, code blocks) and opt-in D2 (server-side), Mermaid (client-side), and LaTeX math (server-side) support.
-2. **Live-reloads on save.** A file watcher re-renders changed files and signals every connected browser to reload over WebSocket. The core loop is: an agent writes, a human reads.
+2. **Live-reloads on save.** A file watcher marks changed files stale and signals every connected browser to reload over WebSocket; the next request re-renders. The core loop is: an agent writes, a human reads.
 3. **Presents a directory as a navigable tree.** In directory mode a sidebar lists every `.md`/`.markdown` file; with `--recursive` nested subdirectories become collapsible groups.
 4. **Stays out of the way.** Zero config, zero runtime dependencies, one static binary. `mdrvserve file.md` just works.
 
@@ -48,9 +48,9 @@ These resolve the small decisions that recur during implementation.
 
 `mdrvserve file.md` must work with no flags and no config file. Every flag that exists makes the next one easier to justify; resist both. Defaults exist precisely so users never have to set them.
 
-### 2. Pre-rendered in memory
+### 2. Rendered on demand, served from memory
 
-All tracked files are rendered to HTML on startup and re-rendered on change. Serving is always a lookup in a `HashMap`, never a disk read plus a parse. This keeps request handling trivial and reload instant.
+All tracked files are rendered to HTML on first request and cached; the cache is invalidated when the file changes, so the next request re-renders. Startup only walks the directory and reads sources — it does no rendering — so a directory of hundreds of files boots in a fraction of a second. Serving is always a lookup in a `HashMap`, never a disk read plus a parse, which keeps request handling trivial and reload instant.
 
 ### 3. Server-side logic, minimal client JS
 
