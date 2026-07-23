@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang='ja'>
+	<head>
+		<meta charset='utf-8' />
+		<title>計算量チートシート</title>
+		<style>
+		body {
+			font-family: system-ui, "Noto Sans CJK JP", sans-serif;
+			max-width: 760px;
+			margin: 2rem auto;
+			color: #1f2328;
+			line-height: 1.6;
+		}
+		h1 {
+			border-bottom: 2px solid #d0d7de;
+			padding-bottom: 0.3rem;
+		}
+		table {
+			border-collapse: collapse;
+			width: 100%;
+		}
+		th, td {
+			border: 1px solid #d0d7de;
+			padding: 0.4rem 0.6rem;
+			text-align: left;
+		}
+		th {
+			background: #f6f8fa;
+		}
+		code {
+			background: #f6f8fa;
+			padding: 0.1rem 0.35rem;
+			border-radius: 4px;
+		}
+		tbody tr {
+			cursor: pointer;
+		}
+		tbody tr.highlight {
+			background: #fff8c5;
+		}
+		</style>
+	</head>
+	<body>
+		<h1>計算量チートシート</h1>
+		<p>
+			競技プログラミングで頻出するデータ構造の計算量まとめ。行をクリックするとハイライトします。
+		</p>
+		<table>
+			<thead>
+				<tr>
+					<th>データ構造</th>
+					<th>検索</th>
+					<th>挿入</th>
+					<th>削除</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td>ソート済み配列</td>
+					<td><code>O(log n)</code></td>
+					<td><code>O(n)</code></td>
+					<td><code>O(n)</code></td>
+				</tr>
+				<tr>
+					<td>ハッシュ表</td>
+					<td><code>O(1)</code> 期待</td>
+					<td><code>O(1)</code> 期待</td>
+					<td><code>O(1)</code> 期待</td>
+				</tr>
+				<tr>
+					<td>平衡二分探索木</td>
+					<td><code>O(log n)</code></td>
+					<td><code>O(log n)</code></td>
+					<td><code>O(log n)</code></td>
+				</tr>
+				<tr>
+					<td>Union-Find</td>
+					<td><code>α(n)</code></td>
+					<td><code>α(n)</code></td>
+					<td>—</td>
+				</tr>
+			</tbody>
+		</table>
+
+		<h2>二分ヒープの可視化</h2>
+		<svg
+			viewBox='0 0 240 130'
+			width='240'
+			height='130'
+			role='img'
+			aria-label='二分ヒープ'
+		>
+			<line
+				x1='120'
+				y1='28'
+				x2='60'
+				y2='90'
+				stroke='#57606a'
+				stroke-width='1.5'
+			/>
+			<line
+				x1='120'
+				y1='28'
+				x2='180'
+				y2='90'
+				stroke='#57606a'
+				stroke-width='1.5'
+			/>
+			<circle cx='120' cy='28' r='16' fill='#ddf4ff' stroke='#0969da' />
+			<text x='120' y='33' text-anchor='middle' font-size='13'>1</text>
+			<circle cx='60' cy='98' r='16' fill='#ddf4ff' stroke='#0969da' />
+			<text x='60' y='103' text-anchor='middle' font-size='13'>3</text>
+			<circle cx='180' cy='98' r='16' fill='#ddf4ff' stroke='#0969da' />
+			<text x='180' y='103' text-anchor='middle' font-size='13'>2</text>
+		</svg>
+
+		<script>
+		document.querySelectorAll('tbody tr').forEach(function(row) {
+			row.addEventListener('click', function() {
+				row.classList.toggle('highlight')
+			})
+		})
+		</script>
+	</body>
+</html>

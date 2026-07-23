@@ -22,6 +22,14 @@ struct Args {
     #[arg(short, long, default_value = "3000")]
     port: u16,
 
+    /// Enable debug-level logging (more verbose than default)
+    #[arg(short = 'd', long)]
+    debug: bool,
+
+    /// Enable trace-level logging (most verbose)
+    #[arg(long)]
+    trace: bool,
+
     /// Open the preview in the default browser
     #[arg(short, long)]
     open: bool,
@@ -46,6 +54,10 @@ struct Args {
     #[arg(long = "with-typst")]
     with_typst: bool,
 
+    /// Render GitHub-flavored alert callouts (`> [!NOTE]`, `[!TIP]`, ...) server-side
+    #[arg(long = "with-gfm", visible_alias = "gfm")]
+    with_gfm: bool,
+
     /// Also serve `.html`/`.htm` files alongside markdown (directory mode)
     #[arg(long = "include-html")]
     include_html: bool,
@@ -58,6 +70,17 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    init_logging(args.debug, args.trace);
+
+    tracing::debug!(
+        path = ?args.path,
+        host = %args.hostname,
+        port = args.port,
+        recursive = args.recursive,
+        open = args.open,
+        "mdrvserve starting"
+    );
+
     let absolute_path = args.path.canonicalize().unwrap_or(args.path);
 
     let (base_dir, tracked_files, is_directory_mode) = if absolute_path.is_file() {
@@ -93,6 +116,7 @@ async fn main() -> Result<()> {
             d2: args.with_d2,
             latex: args.with_latex,
             typst: args.with_typst,
+            gfm: args.with_gfm,
         },
         args.include_html,
         args.include_typst,
@@ -100,4 +124,30 @@ async fn main() -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// Initialize the tracing subscriber.
+///
+/// The default level is `info`; `--debug`/`-d` raises it to `debug` and
+/// `--trace` to `trace`. The `RUST_LOG` environment variable, if set, takes
+/// precedence over both so power users can fine-tune filtering.
+fn init_logging(debug: bool, trace: bool) {
+    use tracing_subscriber::EnvFilter;
+
+    let default_level = if trace {
+        "trace"
+    } else if debug {
+        "debug"
+    } else {
+        "info"
+    };
+
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .compact()
+        .init();
 }

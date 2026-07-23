@@ -24,6 +24,7 @@ minijinja-embed (changes to `templates/` require a rebuild).
 - `src/lib.rs` - Markdown rendering
 - `templates/` - MiniJinja templates (Jinja2 syntax), embedded at compile time
 - `tests/integration_test.rs` - Integration tests using axum-test
+- `examples/` - Sample Markdown/HTML/Typst files (Japanese competitive-programming lessons) for trying every rendering engine
 
 ## Design constraints
 

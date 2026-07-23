@@ -25,12 +25,18 @@ WebSocket. This is the core interaction: an agent writes, a human reads.
 **Ephemeral sessions.** Start it during a session, kill it when you're done. It
 is not a long-running server and doesn't need to be.
 
-**Agent-friendly content.** GFM (tables, task lists, code blocks), opt-in
+**Agent-friendly content.** GFM (tables, task lists, code blocks, alert callouts), opt-in
 D2 / Mermaid / LaTeX math / Typst support, HTML file serving (`--include-html`),
 Typst file serving (`--include-typst`), and directory mode with a navigation sidebar — including `--recursive`
 support for nested subdirectories shown as collapsible groups. Sidebar
 filter with wildcard patterns, source view, and scroll persistence round
 out the reading experience.
+
+**Structured logging.** `--debug`/`-d` and `--trace` raise verbosity (DEBUG/TRACE);
+`RUST_LOG` overrides. Startup, each request, and the lazy-render cache are observable.
+
+**Example docs.** An `examples/` directory of Japanese competitive-programming
+samples exercises every rendering engine end to end.
 
 ## What mdrvserve is not
 
@@ -91,6 +97,13 @@ mdrvserve docs/ --include-typst
 
 # Include HTML files alongside markdown in directory mode
 mdrvserve docs/ --include-html --with-latex
+
+# GFM alert callouts, with debug logging
+mdrvserve doc.md --with-gfm --debug
+
+# Try every engine against the bundled samples
+mdrvserve examples/ --include-html --include-typst \
+  --with-d2 --with-latex --with-mermaid --with-typst --with-gfm --open
 ```
 
 ### Single-file vs directory mode

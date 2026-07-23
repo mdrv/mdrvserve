@@ -33,6 +33,7 @@ use ratex_parser::parse;
 use ratex_svg::{render_to_svg, SvgOptions};
 use ratex_types::color::Color;
 use ratex_types::math_style::MathStyle;
+use tracing::{debug, error, info, trace, warn};
 
 const APP_HTML: &str = include_str!("../frontend/dist/index.html");
 const MERMAID_JS: &str = include_str!("../static/js/mermaid.min.js");
@@ -50,6 +51,9 @@ pub(crate) struct DiagramOpts {
     pub latex: bool,
     /// Render ```typst fenced blocks to SVG via the `typst` binary (server-side).
     pub typst: bool,
+
+    /// Render GitHub-flavored alert callouts (`> [!NOTE]`, ...) server-side.
+    pub gfm: bool,
 }
 
 type SharedMarkdownState = Arc<Mutex<MarkdownState>>;
@@ -165,6 +169,7 @@ struct MarkdownState {
     d2_enabled: bool,
     latex_enabled: bool,
     typst_enabled: bool,
+    gfm_enabled: bool,
     include_html: bool,
     include_typst: bool,
     change_tx: broadcast::Sender<ServerMessage>,
@@ -207,6 +212,7 @@ impl MarkdownState {
             d2_enabled: opts.d2,
             latex_enabled: opts.latex,
             typst_enabled: opts.typst,
+            gfm_enabled: opts.gfm,
             include_html,
             include_typst,
             change_tx,
@@ -230,6 +236,7 @@ impl MarkdownState {
             tracked.html = None;
             tracked.html_freeflow = None;
             tracked.last_modified = fs::metadata(&tracked.path)?.modified()?;
+            debug!(file = filename, "file changed; invalidated cached render");
         }
         Ok(())
     }
@@ -243,6 +250,7 @@ impl MarkdownState {
 
         let metadata = fs::metadata(&file_path)?;
         let content = fs::read_to_string(&file_path)?;
+        info!(file = %key, "tracking new file");
         self.tracked_files.insert(
             key,
             TrackedFile {
@@ -290,12 +298,14 @@ impl MarkdownState {
             return;
         };
         if tracked.html.is_some() {
+            trace!(file = filename, "render cache hit");
             return;
         }
         let (html, html_freeflow) =
             Self::render_file_content(&tracked.source, &tracked.path, opts);
         tracked.html = Some(html);
         tracked.html_freeflow = html_freeflow;
+        debug!(file = filename, "rendered file");
     }
 
     fn opts(&self) -> DiagramOpts {
@@ -304,6 +314,7 @@ impl MarkdownState {
             d2: self.d2_enabled,
             latex: self.latex_enabled,
             typst: self.typst_enabled,
+            gfm: self.gfm_enabled,
         }
     }
 
@@ -333,6 +344,10 @@ impl MarkdownState {
             html_body = render_typst_blocks(&html_body);
         }
 
+        if opts.gfm {
+            html_body = render_gfm_alerts(&html_body);
+        }
+
         Ok(html_body)
     }
 
@@ -351,6 +366,10 @@ impl MarkdownState {
 
         if opts.typst {
             html = render_typst_blocks(&html);
+        }
+
+        if opts.gfm {
+            html = render_gfm_alerts(&html);
         }
 
         Ok(html)
@@ -380,6 +399,7 @@ async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
 }
 
 async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
+    trace!(kind = ?event.kind, paths = ?event.paths, "fs watcher event");
     match event.kind {
         notify::EventKind::Modify(notify::event::ModifyKind::Name(rename_mode)) => {
             use notify::event::RenameMode;
@@ -539,28 +559,29 @@ pub(crate) async fn serve_markdown(
     let hostname = hostname.as_ref();
 
     if opts.d2 && !d2_available() {
-        eprintln!(
-            "⚠ --with-d2 set but the `d2` binary was not found on PATH.\n  \
-             D2 code blocks will render as plain source. Install D2: https://d2lang.com\n"
+        warn!(
+            "--with-d2 set but the `d2` binary was not found on PATH; \
+             D2 code blocks will render as plain source (https://d2lang.com)"
         );
     }
 
     if (opts.typst || include_typst) && !typst_available() {
-        eprintln!(
-            "⚠ --with-typst/--include-typst set but the `typst` binary was not found on PATH.\n  \
-             Typst content will render as plain source. Install Typst: https://github.com/typst/typst\n"
+        warn!(
+            "--with-typst/--include-typst set but the `typst` binary was not found on PATH; \
+             typst content will render as plain source (https://github.com/typst/typst)"
         );
     }
 
     if (opts.typst || include_typst) && typst_available() && !typst_html_available() {
-        eprintln!(
-            "⚠ `typst` is installed but lacks the HTML export feature.\n  \
-             Typst free-flow will be disabled (paged rendering still works).\n  \
-             Install a Typst build compiled with `--features html` (0.13+) to enable it.\n"
+        warn!(
+            "`typst` is installed but lacks the HTML export feature; \
+             typst free-flow will be disabled (paged rendering still works). \
+             Install a build compiled with `--features html` (0.13+)"
         );
     }
 
     let first_file = tracked_files.first().cloned();
+    let file_count = tracked_files.len();
     let router = new_router(
         base_dir.clone(),
         tracked_files,
@@ -574,20 +595,18 @@ pub(crate) async fn serve_markdown(
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
 
     if actual_port != port {
-        println!("⚠ Port {port} in use, using {actual_port} instead");
+        warn!(requested = port, actual = actual_port, "requested port in use; using alternative");
     }
 
     let listen_addr = format_host(hostname, actual_port);
 
     if is_directory_mode {
-        println!("📁 Serving markdown files from: {}", base_dir.display());
+        info!(dir = %base_dir.display(), files = file_count, "serving markdown directory");
     } else if let Some(file_path) = first_file {
-        println!("📄 Serving markdown file: {}", file_path.display());
+        info!(file = %file_path.display(), "serving markdown file");
     }
 
-    println!("🌐 Server running at: http://{listen_addr}");
-    println!("⚡ Live reload enabled");
-    println!("\nPress Ctrl+C to stop the server");
+    info!(url = format!("http://{listen_addr}"), "server listening; live reload enabled (Ctrl+C to stop)");
 
     if open {
         let browse_addr = format_host(&browsable_host(hostname), actual_port);
@@ -653,9 +672,9 @@ fn open_browser(url: &str) -> Result<()> {
 
     std::thread::spawn(move || match child.wait() {
         Ok(status) if !status.success() => {
-            eprintln!("{program} exited with {status}");
+            warn!(%program, ?status, "browser command exited non-zero");
         }
-        Err(e) => eprintln!("Failed waiting on {program}: {e}"),
+        Err(e) => error!(%program, error = %e, "failed waiting on browser"),
         _ => {}
     });
 
@@ -675,6 +694,7 @@ async fn serve_html_root(State(state): State<SharedMarkdownState>) -> impl IntoR
         }
     };
 
+    debug!(file = %filename, "serving root (index)");
     state.ensure_rendered(&filename);
     render_markdown(&state, &filename).await
 }
@@ -683,6 +703,7 @@ async fn serve_file(
     AxumPath(filename): AxumPath<String>,
     State(state): State<SharedMarkdownState>,
 ) -> axum::response::Response {
+    debug!(file = %filename, "serving request");
     if filename.ends_with(".md")
         || filename.ends_with(".markdown")
         || filename.ends_with(".html")
@@ -1128,6 +1149,59 @@ fn render_typst_document_freeflow(content: &str) -> Result<String> {
 }
 
 /// Replace every math element (inline `$...$` and block `$$...$$`) in `html`
+/// Convert GitHub-flavored Markdown alert blockquotes into styled callouts.
+///
+/// markdown-rs does not implement GFM alerts, so `> [!NOTE]` (and TIP,
+/// IMPORTANT, WARNING, CAUTION) render as a normal blockquote whose first
+/// paragraph begins with the literal `[!TYPE]` marker. This post-processor
+/// detects such blockquotes and rewraps them as titled callout boxes
+/// (`<div class="markdown-alert markdown-alert-{type}">`). Non-alert
+/// blockquotes are left untouched.
+fn render_gfm_alerts(html: &str) -> String {
+    let Ok(block_re) = Regex::new(r"(?s)<blockquote>(.*?)</blockquote>") else {
+        return html.to_string();
+    };
+    let Ok(alert_re) = Regex::new(r"(?s)^\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*?)</p>(.*)$") else {
+        return html.to_string();
+    };
+
+    block_re
+        .replace_all(html, |caps: &regex::Captures| {
+            let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let Some(a) = alert_re.captures(inner) else {
+                return caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+            };
+            let typ = a.get(1).map(|m| m.as_str()).unwrap_or("NOTE");
+            let first_rest = a.get(2).map(|m| m.as_str()).unwrap_or("");
+            let remainder = a.get(3).map(|m| m.as_str()).unwrap_or("");
+            let (kind, title) = match typ {
+                "TIP" => ("tip", "Tip"),
+                "IMPORTANT" => ("important", "Important"),
+                "WARNING" => ("warning", "Warning"),
+                "CAUTION" => ("caution", "Caution"),
+                _ => ("note", "Note"),
+            };
+            let mut body = String::new();
+            let first_trimmed = first_rest.trim();
+            if !first_trimmed.is_empty() {
+                body.push_str("<p>");
+                body.push_str(first_trimmed);
+                body.push_str("</p>");
+            }
+            body.push_str(remainder.trim_start());
+            let mut out = String::new();
+            out.push_str("<div class='markdown-alert markdown-alert-");
+            out.push_str(kind);
+            out.push_str("'><p class='markdown-alert-title'>");
+            out.push_str(title);
+            out.push_str("</p>");
+            out.push_str(&body);
+            out.push_str("</div>");
+            out
+        })
+        .into_owned()
+}
+
 /// with an inline SVG rendered by RaTeX. Elements that fail to parse are
 /// left untouched so the source remains visible.
 fn render_latex_blocks(html: &str) -> String {
@@ -1712,6 +1786,7 @@ mod tests {
                 d2: false,
                 latex: false,
                 typst: false,
+                gfm: false,
             },
         )
     }
@@ -2118,6 +2193,40 @@ classDiagram
         assert_eq!(extract_mdrv_data(&body)["mermaidEnabled"], false);
     }
 
+    #[test]
+    fn test_gfm_alert_renders_callout() {
+        let md = "> [!NOTE]\n> This is a note.\n";
+        let html = MarkdownState::markdown_to_html(
+            md,
+            DiagramOpts { gfm: true, ..Default::default() },
+        )
+        .unwrap();
+        assert!(
+            html.contains("markdown-alert-note"),
+            "note callout missing: {html}"
+        );
+        assert!(
+            html.contains("markdown-alert-title"),
+            "title missing: {html}"
+        );
+        assert!(html.contains("This is a note."), "body missing: {html}");
+    }
+
+    #[test]
+    fn test_gfm_alert_leaves_plain_blockquote() {
+        let md = "> Just a regular quote.\n";
+        let html = MarkdownState::markdown_to_html(
+            md,
+            DiagramOpts { gfm: true, ..Default::default() },
+        )
+        .unwrap();
+        assert!(html.contains("<blockquote>"));
+        assert!(
+            !html.contains("markdown-alert"),
+            "plain blockquote became an alert: {html}"
+        );
+    }
+
     #[tokio::test]
     async fn test_d2_block_degrades_gracefully_without_binary() {
         // A d2 block renders either as inline SVG (d2 installed) or as a plain
@@ -2131,6 +2240,7 @@ classDiagram
                 d2: true,
                 latex: false,
                 typst: false,
+                gfm: false,
             },
         );
 
@@ -2266,6 +2376,7 @@ classDiagram
                 d2: false,
                 latex: true,
                 typst: false,
+                gfm: false,
             },
         );
 
@@ -2293,6 +2404,7 @@ $$\n";
                 d2: false,
                 latex: true,
                 typst: false,
+                gfm: false,
             },
         );
 

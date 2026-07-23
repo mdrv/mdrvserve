@@ -1,6 +1,6 @@
 [package]
 name = "mdrvserve"
-version = "267.3.0"
+version = "267.4.0"
 categories = ["command-line-utilities", "web-programming"]
 documentation = "https://github.com/mdrv/mdrvserve#readme"
 edition = "2021"
@@ -41,6 +41,8 @@ tempfile = "3.27.0"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "fs", "time"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["fs", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 strip = true

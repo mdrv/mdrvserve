@@ -126,6 +126,17 @@ HTML feature enabled" — when the installed `typst` lacks the `--features html`
 export (probed once via `typst_html_available()`); there is no SVG fallback, a
 startup warning is logged, and paged rendering remains available.
 
+### GFM alerts (server-side, `--with-gfm`)
+
+When `--with-gfm` (alias `--gfm`) is passed, a final post-processor
+(`render_gfm_alerts`) rewrites GitHub-flavored alert blockquotes into styled
+callouts. markdown-rs renders `> [!NOTE]` ... as a plain `<blockquote>` whose
+first `<p>` starts with the marker; the post-processor detects the five
+canonical kinds (`NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`) and rewraps
+each as `<div class='markdown-alert markdown-alert-{kind}'>` with a titled
+header and GitHub-matching hues (see `.markdown-alert*` in `app.css`). Plain
+blockquotes pass through untouched. Client JS: none.
+
 ## Frontend
 
 - **Stack:** [Svelte 5](https://svelte.dev/) + Vite, built to a single

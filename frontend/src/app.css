@@ -725,6 +725,52 @@ pre code {
 	width: 80%;
 }
 
+/* GitHub-flavored Markdown alert callouts (rendered server-side). */
+.markdown-alert {
+	margin: 16px 0;
+	padding: 4px 16px 8px;
+	border-left: 4px solid var(--border-color);
+	border-radius: 4px;
+	background: var(--code-bg);
+}
+.markdown-alert > :last-child {
+	margin-bottom: 0;
+}
+.markdown-alert-title {
+	font-weight: 600;
+	margin: 8px 0;
+}
+.markdown-alert-note {
+	border-left-color: #0969da;
+}
+.markdown-alert-note > .markdown-alert-title {
+	color: #0969da;
+}
+.markdown-alert-tip {
+	border-left-color: #1a7f37;
+}
+.markdown-alert-tip > .markdown-alert-title {
+	color: #1a7f37;
+}
+.markdown-alert-important {
+	border-left-color: #8250df;
+}
+.markdown-alert-important > .markdown-alert-title {
+	color: #8250df;
+}
+.markdown-alert-warning {
+	border-left-color: #9a6700;
+}
+.markdown-alert-warning > .markdown-alert-title {
+	color: #9a6700;
+}
+.markdown-alert-caution {
+	border-left-color: #cf222e;
+}
+.markdown-alert-caution > .markdown-alert-title {
+	color: #cf222e;
+}
+
 /* Server-rendered LaTeX math (inlined SVG via RaTeX). */
 .latex-inline {
 	display: inline-block;

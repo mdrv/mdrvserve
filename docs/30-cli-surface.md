@@ -45,8 +45,11 @@ mdrvserve <PATH> [FLAGS]
 | `--with-d2`       |       | bool   | false       | Render `` ```d2 `` blocks to SVG via the `d2` binary (server-side). See [40 — Rendering](./40-rendering.md).       |
 | `--with-latex`    |       | bool   | false       | Render `$...$` and `$$...$$` math to SVG via RaTeX (server-side). See [40 — Rendering](./40-rendering.md).         |
 | `--with-typst`    |       | bool   | false       | Render `` ```typst `` blocks to SVG via the `typst` binary (server-side). See [40 — Rendering](./40-rendering.md). |
+| `--with-gfm`      |       | bool   | false       | Render GFM alert blockquotes (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as styled callouts (server-side). Alias `--gfm`. See [40 — Rendering](./40-rendering.md). |
 | `--include-html`  |       | bool   | false       | Track `.html`/`.htm` files in directory mode (with D2/LaTeX/Typst post-processing).                                |
 | `--include-typst` |       | bool   | false       | Track `.typ` files in directory mode, compiled to SVG page(s) via the `typst` binary.                              |
+| `--debug`         | `-d`  | bool   | false       | Verbose logging at DEBUG level (`RUST_LOG` overrides if set).                                                  |
+| `--trace`         |       | bool   | false       | Trace-level logging (`RUST_LOG` overrides if set).                                                             |
 | `--help`          | `-h`  |        |             | Print help.                                                                                                        |
 | `--version`       | `-V`  |        |             | Print version.                                                                                                     |
 
@@ -58,6 +61,8 @@ mdrvserve <PATH> [FLAGS]
 - **Diagrams:** opt-in. Mermaid, D2, LaTeX, and Typst are off by default; pass `--with-mermaid`, `--with-d2`, `--with-latex`, or `--with-typst` to enable. Themes are always available.
 - **HTML files:** markdown only by default. Pass `--include-html` to also track `.html`/`.htm` files in directory mode.
 - **Typst files:** pass `--include-typst` to also track `.typ` files in directory mode, each compiled to inlined SVG via the `typst` binary.
+- **GFM alerts:** off by default. Pass `--with-gfm` (alias `--gfm`) to render `> [!NOTE]`-style callouts server-side.
+- **Logging:** INFO by default. Pass `--debug`/`-d` for DEBUG or `--trace` for TRACE; `RUST_LOG` overrides if set.
 
 ## Port selection
 
