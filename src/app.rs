@@ -48,6 +48,8 @@ pub(crate) struct DiagramOpts {
     pub d2: bool,
     /// Render LaTeX math (inline `$...$` and block `$$...$$`) to SVG via RaTeX.
     pub latex: bool,
+    /// Render ```typst fenced blocks to SVG via the `typst` binary (server-side).
+    pub typst: bool,
 }
 
 type SharedMarkdownState = Arc<Mutex<MarkdownState>>;
@@ -63,17 +65,18 @@ pub(crate) fn scan_markdown_files(
     dir: &Path,
     recursive: bool,
     include_html: bool,
+    include_typst: bool,
 ) -> Result<Vec<PathBuf>> {
     let mut md_files = Vec::new();
 
     if recursive {
-        collect_markdown_recursive(dir, &mut md_files, include_html)?;
+        collect_markdown_recursive(dir, &mut md_files, include_html, include_typst)?;
     } else {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && is_tracked_file(&path, include_html) {
+            if path.is_file() && is_tracked_file(&path, include_html, include_typst) {
                 md_files.push(path);
             }
         }
@@ -88,14 +91,15 @@ fn collect_markdown_recursive(
     dir: &Path,
     md_files: &mut Vec<PathBuf>,
     include_html: bool,
+    include_typst: bool,
 ) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_dir() {
-            collect_markdown_recursive(&path, md_files, include_html)?;
-        } else if path.is_file() && is_tracked_file(&path, include_html) {
+            collect_markdown_recursive(&path, md_files, include_html, include_typst)?;
+        } else if path.is_file() && is_tracked_file(&path, include_html, include_typst) {
             md_files.push(path);
         }
     }
@@ -130,15 +134,26 @@ fn is_html_file(path: &Path) -> bool {
 }
 
 /// Returns true if the file should be tracked. Markdown files are always
-/// tracked; HTML files are tracked only when `include_html` is set.
-fn is_tracked_file(path: &Path, include_html: bool) -> bool {
-    is_markdown_file(path) || (include_html && is_html_file(path))
+/// tracked; HTML files are tracked when `include_html` is set; Typst files
+/// are tracked when `include_typst` is set.
+fn is_tracked_file(path: &Path, include_html: bool, include_typst: bool) -> bool {
+    is_markdown_file(path)
+        || (include_html && is_html_file(path))
+        || (include_typst && is_typst_file(path))
+}
+
+fn is_typst_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("typ"))
+        .unwrap_or(false)
 }
 
 struct TrackedFile {
     path: PathBuf,
     last_modified: SystemTime,
     html: String,
+    html_freeflow: Option<String>,
     source: String,
 }
 
@@ -149,7 +164,9 @@ struct MarkdownState {
     mermaid_enabled: bool,
     d2_enabled: bool,
     latex_enabled: bool,
+    typst_enabled: bool,
     include_html: bool,
+    include_typst: bool,
     change_tx: broadcast::Sender<ServerMessage>,
 }
 
@@ -160,6 +177,7 @@ impl MarkdownState {
         is_directory_mode: bool,
         opts: DiagramOpts,
         include_html: bool,
+        include_typst: bool,
     ) -> Result<Self> {
         let (change_tx, _) = broadcast::channel::<ServerMessage>(16);
 
@@ -168,10 +186,18 @@ impl MarkdownState {
             let metadata = fs::metadata(&file_path)?;
             let last_modified = metadata.modified()?;
             let content = fs::read_to_string(&file_path)?;
-            let html = if is_html_file(&file_path) {
+            let is_typst = is_typst_file(&file_path);
+            let html = if is_typst {
+                render_typst_document(&content)?
+            } else if is_html_file(&file_path) {
                 Self::render_html_content(&content, opts)?
             } else {
                 Self::markdown_to_html(&content, opts)?
+            };
+            let html_freeflow = if is_typst {
+                Some(render_typst_document_freeflow(&content)?)
+            } else {
+                None
             };
 
             let key = relative_key(&file_path, &base_dir);
@@ -182,6 +208,7 @@ impl MarkdownState {
                     path: file_path,
                     last_modified,
                     html,
+                    html_freeflow,
                     source: content,
                 },
             );
@@ -194,7 +221,9 @@ impl MarkdownState {
             mermaid_enabled: opts.mermaid,
             d2_enabled: opts.d2,
             latex_enabled: opts.latex,
+            typst_enabled: opts.typst,
             include_html,
+            include_typst,
             change_tx,
         })
     }
@@ -213,10 +242,17 @@ impl MarkdownState {
         let opts = self.opts();
         if let Some(tracked) = self.tracked_files.get_mut(filename) {
             let content = fs::read_to_string(&tracked.path)?;
-            tracked.html = if is_html_file(&tracked.path) {
+            tracked.html = if is_typst_file(&tracked.path) {
+                render_typst_document(&content)?
+            } else if is_html_file(&tracked.path) {
                 Self::render_html_content(&content, opts)?
             } else {
                 Self::markdown_to_html(&content, opts)?
+            };
+            tracked.html_freeflow = if is_typst_file(&tracked.path) {
+                Some(render_typst_document_freeflow(&content)?)
+            } else {
+                None
             };
             tracked.source = content;
             tracked.last_modified = fs::metadata(&tracked.path)?.modified()?;
@@ -234,10 +270,18 @@ impl MarkdownState {
 
         let metadata = fs::metadata(&file_path)?;
         let content = fs::read_to_string(&file_path)?;
-        let html = if is_html_file(&file_path) {
+        let is_typst = is_typst_file(&file_path);
+        let html = if is_typst {
+            render_typst_document(&content)?
+        } else if is_html_file(&file_path) {
             Self::render_html_content(&content, opts)?
         } else {
             Self::markdown_to_html(&content, opts)?
+        };
+        let html_freeflow = if is_typst {
+            Some(render_typst_document_freeflow(&content)?)
+        } else {
+            None
         };
 
         self.tracked_files.insert(
@@ -246,6 +290,7 @@ impl MarkdownState {
                 path: file_path,
                 last_modified: metadata.modified()?,
                 html,
+                html_freeflow,
                 source: content,
             },
         );
@@ -258,6 +303,7 @@ impl MarkdownState {
             mermaid: self.mermaid_enabled,
             d2: self.d2_enabled,
             latex: self.latex_enabled,
+            typst: self.typst_enabled,
         }
     }
 
@@ -283,6 +329,10 @@ impl MarkdownState {
             html_body = render_latex_blocks(&html_body);
         }
 
+        if opts.typst {
+            html_body = render_typst_blocks(&html_body);
+        }
+
         Ok(html_body)
     }
 
@@ -299,13 +349,17 @@ impl MarkdownState {
             html = render_latex_blocks(&html);
         }
 
+        if opts.typst {
+            html = render_typst_blocks(&html);
+        }
+
         Ok(html)
     }
 }
 
 async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
     let mut state_guard = state.lock().await;
-    if !is_tracked_file(path, state_guard.include_html) {
+    if !is_tracked_file(path, state_guard.include_html, state_guard.include_typst) {
         return;
     }
 
@@ -360,7 +414,7 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
         }
         _ => {
             for path in &event.paths {
-                if is_markdown_file(path) || is_html_file(path) {
+                if is_markdown_file(path) || is_html_file(path) || is_typst_file(path) {
                     match event.kind {
                         notify::EventKind::Create(_)
                         | notify::EventKind::Modify(notify::event::ModifyKind::Data(_)) => {
@@ -397,6 +451,7 @@ fn new_router(
     is_recursive: bool,
     opts: DiagramOpts,
     include_html: bool,
+    include_typst: bool,
 ) -> Result<Router> {
     let base_dir = base_dir.canonicalize()?;
 
@@ -406,6 +461,7 @@ fn new_router(
         is_directory_mode,
         opts,
         include_html,
+        include_typst,
     )?));
 
     let watcher_state = state.clone();
@@ -478,6 +534,7 @@ pub(crate) async fn serve_markdown(
     open: bool,
     opts: DiagramOpts,
     include_html: bool,
+    include_typst: bool,
 ) -> Result<()> {
     let hostname = hostname.as_ref();
 
@@ -485,6 +542,13 @@ pub(crate) async fn serve_markdown(
         eprintln!(
             "⚠ --with-d2 set but the `d2` binary was not found on PATH.\n  \
              D2 code blocks will render as plain source. Install D2: https://d2lang.com\n"
+        );
+    }
+
+    if (opts.typst || include_typst) && !typst_available() {
+        eprintln!(
+            "⚠ --with-typst/--include-typst set but the `typst` binary was not found on PATH.\n  \
+             Typst content will render as plain source. Install Typst: https://github.com/typst/typst\n"
         );
     }
 
@@ -496,6 +560,7 @@ pub(crate) async fn serve_markdown(
         is_recursive,
         opts,
         include_html,
+        include_typst,
     )?;
 
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
@@ -613,6 +678,7 @@ async fn serve_file(
         || filename.ends_with(".markdown")
         || filename.ends_with(".html")
         || filename.ends_with(".htm")
+        || filename.ends_with(".typ")
     {
         let state = state.lock().await;
 
@@ -793,6 +859,222 @@ fn unescape_html(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// Escape `&`, `<`, `>` for safe display inside a `<pre><code>` fallback block.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Whether the `typst` binary is available on PATH. Cached for the process.
+fn typst_available() -> bool {
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| {
+        Command::new("typst")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Replace every ```typst code block in `html` with an inline SVG rendered by
+/// the `typst` binary. Blocks that fail to render (or when `typst` is absent)
+/// are left untouched so the source remains visible.
+fn render_typst_blocks(html: &str) -> String {
+    if !typst_available() {
+        return html.to_string();
+    }
+
+    let re = Regex::new(r#"(?s)<pre><code class="language-typst">(.*?)</code></pre>"#)
+        .expect("static regex");
+
+    let mut result = String::with_capacity(html.len());
+    let mut last_end = 0;
+
+    for caps in re.captures_iter(html) {
+        let m = caps.get(0).unwrap();
+        result.push_str(&html[last_end..m.start()]);
+
+        let source = unescape_html(&caps[1]);
+        match render_one_typst(&source) {
+            Ok(svg) => {
+                result.push_str(r#"<div class="typst-doc"><div class="typst-doc-page">"#);
+                result.push_str(&svg);
+                result.push_str("</div></div>");
+            }
+            Err(_) => {
+                // Leave the original block intact so the source is visible.
+                result.push_str(m.as_str());
+            }
+        }
+
+        last_end = m.end();
+    }
+    result.push_str(&html[last_end..]);
+    result
+}
+
+/// Render a single Typst source snippet to SVG via `typst compile - -`
+/// (stdin → stdout). Single-page only; multi-page snippets fall back to source.
+fn render_one_typst(source: &str) -> Result<String> {
+    let mut child = Command::new("typst")
+        .args(["compile", "-", "-", "--format", "svg"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `typst`")?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(source.as_bytes())?;
+    }
+    // Drop stdin to signal EOF.
+    child.stdin.take();
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait on `typst`")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "typst exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Compile Typst `source` to a list of per-page SVG strings using a temp
+/// directory and a page-number template (supports multi-page output).
+/// Returns an empty vec when `typst` is absent or compilation fails, so the
+/// caller can fall back to a source listing. IO/spawn errors propagate.
+fn compile_typst_pages(source: &str) -> Result<Vec<String>> {
+    if !typst_available() {
+        return Ok(Vec::new());
+    }
+
+    let dir = tempfile::TempDir::new()?;
+    let out_pattern = dir.path().join("page-{0p}-of-{t}.svg");
+    let mut child = Command::new("typst")
+        .args([
+            "compile",
+            "-",
+            &out_pattern.to_string_lossy(),
+            "--format",
+            "svg",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn `typst`")?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(source.as_bytes())?;
+    }
+    child.stdin.take();
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait on `typst`")?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let mut pages: Vec<PathBuf> = fs::read_dir(dir.path())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("svg"))
+        .collect();
+    pages.sort();
+
+    pages
+        .into_iter()
+        .map(|p| fs::read_to_string(p).map_err(anyhow::Error::from))
+        .collect()
+}
+
+/// Wrap a list of per-page SVG strings into the `.typst-doc` container. When
+/// `freeflow` is set, the container gets an extra `typst-doc-freeflow` class.
+fn wrap_typst_pages(pages: &[String], freeflow: bool) -> String {
+    let mut html = String::new();
+    let class = if freeflow {
+        r#"typst-doc typst-doc-freeflow"#
+    } else {
+        r#"typst-doc"#
+    };
+    html.push_str(&format!(r#"<div class="{class}">"#));
+    for (i, svg) in pages.iter().enumerate() {
+        if i > 0 {
+            html.push_str(r#"<hr class="typst-page-break">"#);
+        }
+        html.push_str(r#"<div class="typst-doc-page">"#);
+        html.push_str(svg);
+        html.push_str("</div>");
+    }
+    html.push_str("</div>");
+    html
+}
+
+/// Compile a standalone `.typ` document to inlined SVG page(s), preserving
+/// Typst's paged model. Falls back to a plain source listing when `typst` is
+/// absent or compilation fails.
+fn render_typst_document(content: &str) -> Result<String> {
+    let source_fallback = || {
+        format!(
+            r#"<pre><code class="language-typst">{}</code></pre>"#,
+            escape_html(content)
+        )
+    };
+
+    let pages = compile_typst_pages(content)?;
+    if pages.is_empty() {
+        return Ok(source_fallback());
+    }
+
+    Ok(wrap_typst_pages(&pages, false))
+}
+
+/// Compile a `.typ` document in "free-flow" mode: the page is forced to a
+/// single growing sheet (`height: auto`), the white page background is
+/// dropped (`fill: none`), and black glyphs are recolored to `currentColor`
+/// so they follow the active theme. Because Typst is a paged typesetter the
+/// result is still fixed-layout SVG (text does not reflow to the viewport),
+/// but page breaks are eliminated and the background/text inherit the
+/// theme. Falls back to a plain source listing when `typst` is absent or
+/// compilation fails.
+fn render_typst_document_freeflow(content: &str) -> Result<String> {
+    let source_fallback = || {
+        format!(
+            r#"<pre><code class="language-typst">{}</code></pre>"#,
+            escape_html(content)
+        )
+    };
+
+    // Match the reading column (~900px = 675pt). `#set` applies forward, so a
+    // user's own later `#set page(...)` may override these fields; free-flow is
+    // best-effort by design.
+    let transformed = format!(
+        "#set page(width: 675pt, height: auto, fill: none, margin: (x: 1.5em, y: 1.4em))\n{content}"
+    );
+
+    let pages = compile_typst_pages(&transformed)?;
+    if pages.is_empty() {
+        return Ok(source_fallback());
+    }
+
+    let recolored: Vec<String> = pages
+        .iter()
+        .map(|svg| svg.replace(r##"fill=\"#000000\""##, r##"fill=\"currentColor\""##))
+        .collect();
+
+    Ok(wrap_typst_pages(&recolored, true))
+}
+
 /// Replace every math element (inline `$...$` and block `$$...$$`) in `html`
 /// with an inline SVG rendered by RaTeX. Elements that fail to parse are
 /// left untouched so the source remains visible.
@@ -905,10 +1187,14 @@ fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
 }
 
 async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCode, Html<String>) {
-    let (content, source) = match state.tracked_files.get(current_file) {
-        Some(tracked) => (tracked.html.as_str(), tracked.source.as_str()),
+    let tracked = match state.tracked_files.get(current_file) {
+        Some(t) => t,
         None => return (StatusCode::NOT_FOUND, Html("File not found".to_string())),
     };
+    let content = tracked.html.as_str();
+    let source = tracked.source.as_str();
+    let is_typst = is_typst_file(std::path::Path::new(current_file));
+    let content_freeflow = tracked.html_freeflow.as_deref().unwrap_or("");
 
     let has_mermaid = state.mermaid_enabled && content.contains(r#"class="language-mermaid""#);
 
@@ -931,6 +1217,8 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
         "pageTitle": page_title,
         "showNavigation": show_nav,
         "mermaidEnabled": has_mermaid,
+        "isTypst": is_typst,
+        "contentFreeflow": content_freeflow,
     });
 
     let mut json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".to_string());
@@ -1158,7 +1446,7 @@ mod tests {
     fn test_scan_markdown_files_empty_directory() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
         assert_eq!(result.len(), 0);
     }
 
@@ -1173,7 +1461,7 @@ mod tests {
         fs::write(temp_dir.path().join("test.txt"), "text").expect("Failed to write");
         fs::write(temp_dir.path().join("README"), "readme").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 3);
 
@@ -1194,7 +1482,7 @@ mod tests {
         fs::create_dir(&sub_dir).expect("Failed to create subdir");
         fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_name().unwrap().to_str().unwrap(), "root.md");
@@ -1209,7 +1497,7 @@ mod tests {
         fs::write(temp_dir.path().join("test3.Md"), "# Test 3").expect("Failed to write");
         fs::write(temp_dir.path().join("test4.MARKDOWN"), "# Test 4").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 4);
     }
@@ -1229,11 +1517,11 @@ mod tests {
         fs::write(nested_dir.join("deeper.md"), "# Deeper").expect("Failed to write");
 
         // Non-recursive still ignores nested files
-        let flat = scan_markdown_files(temp_dir.path(), false, false).expect("Failed to scan");
+        let flat = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
         assert_eq!(flat.len(), 1);
 
         // Recursive picks up nested files
-        let result = scan_markdown_files(temp_dir.path(), true, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), true, false, false).expect("Failed to scan");
         assert_eq!(result.len(), 3);
     }
 
@@ -1341,7 +1629,7 @@ mod tests {
         let tracked_files = vec![canonical_path];
         let is_directory_mode = false;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false, opts, false)
+        let router = new_router(base_dir, tracked_files, is_directory_mode, false, opts, false, false)
             .expect("Failed to create router");
 
         let server = if use_http {
@@ -1371,6 +1659,7 @@ mod tests {
                 mermaid: true,
                 d2: false,
                 latex: false,
+                typst: false,
             },
         )
     }
@@ -1387,7 +1676,7 @@ mod tests {
 
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files =
-            scan_markdown_files(&base_dir, false, false).expect("Failed to scan markdown files");
+            scan_markdown_files(&base_dir, false, false, false).expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -1396,6 +1685,7 @@ mod tests {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
             false,
         )
         .expect("Failed to create router");
@@ -1431,7 +1721,7 @@ mod tests {
             .expect("Failed to write guide/intro.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, true, false).expect("Failed to scan");
+        let tracked_files = scan_markdown_files(&base_dir, true, false, false).expect("Failed to scan");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -1440,6 +1730,7 @@ mod tests {
             is_directory_mode,
             true,
             DiagramOpts::default(),
+            false,
             false,
         )
         .expect("Failed to create router");
@@ -1567,6 +1858,7 @@ fn main() {
             false,
             DiagramOpts::default(),
             false,
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -1603,6 +1895,7 @@ fn main() {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
             false,
         )
         .expect("Failed to create router");
@@ -1785,6 +2078,7 @@ classDiagram
                 mermaid: false,
                 d2: true,
                 latex: false,
+                typst: false,
             },
         );
 
@@ -1793,6 +2087,111 @@ classDiagram
         assert!(
             content.contains("<svg") || content.contains(r#"class="language-d2""#),
             "d2 block should produce SVG or fall back to a code block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_typst_block_renders_svg_or_degrades() {
+        // A ```typst block renders either as inline SVG (typst installed) or as
+        // a plain code block (typst absent). Both outcomes are acceptable.
+        let markdown_content = "# Typst Test\n\n```typst\nHello.\n```\n";
+        let (server, _temp_file) = create_test_server_impl(
+            markdown_content,
+            false,
+            DiagramOpts {
+                typst: true,
+                ..Default::default()
+            },
+        );
+
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("<svg") || content.contains(r#"class="language-typst""#),
+            "typst block should produce SVG or fall back to a code block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_typst_document_renders_svg_or_degrades() {
+        // A `.typ` file served via --include-typst renders either as inlined
+        // SVG page(s) (typst installed) or as a plain source listing (typst
+        // absent). Both outcomes are acceptable.
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let typ_content = "#set page(width: 200pt)\nHello from Typst.\n";
+        fs::write(temp_dir.path().join("doc.typ"), typ_content)
+            .expect("Failed to write doc.typ");
+
+        let base_dir = temp_dir.path().to_path_buf();
+        let tracked_files = scan_markdown_files(&base_dir, false, false, true)
+            .expect("Failed to scan");
+        assert_eq!(
+            tracked_files.len(),
+            1,
+            ".typ file should be tracked with --include-typst"
+        );
+
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            true,
+            false,
+            DiagramOpts::default(),
+            false,
+            true,
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
+
+        let body = server.get("/").await.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains("<svg") || content.contains(r#"class="language-typst""#),
+            "typst document should produce SVG pages or fall back to a source listing"
+        );
+    }
+
+    #[test]
+    fn test_typst_document_freeflow_renders_or_degrades() {
+        // Free-flow render either yields the continuous themed sheet (typst
+        // installed) or the plain source listing (typst absent). Both are valid.
+        let out = render_typst_document_freeflow("#set page(width: 200pt)\nFlow.\n")
+            .expect("freeflow render should not error");
+        assert!(
+            out.contains(r#"typst-doc-freeflow"#)
+                || out.contains(r#"class="language-typst""#),
+            "freeflow output should be the continuous themed sheet or a source listing"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_typst_document_exposes_freeflow_in_data() {
+        // A served `.typ` file must signal `isTypst` and provide a free-flow
+        // rendering alongside the paged one.
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        fs::write(temp_dir.path().join("doc.typ"), "Hello Typst.\n")
+            .expect("Failed to write doc.typ");
+        let base_dir = temp_dir.path().to_path_buf();
+        let tracked_files = scan_markdown_files(&base_dir, false, false, true)
+            .expect("Failed to scan");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            true,
+            false,
+            DiagramOpts::default(),
+            false,
+            true,
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
+
+        let data = extract_mdrv_data(&server.get("/").await.text());
+        assert_eq!(data["isTypst"], true, ".typ file should set isTypst");
+        let freeflow = data["contentFreeflow"].as_str().unwrap_or("");
+        assert!(
+            !freeflow.is_empty(),
+            "contentFreeflow should always be populated for a .typ file"
         );
     }
 
@@ -1806,6 +2205,7 @@ classDiagram
                 mermaid: false,
                 d2: false,
                 latex: true,
+                typst: false,
             },
         );
 
@@ -1832,6 +2232,7 @@ $$\n";
                 mermaid: false,
                 d2: false,
                 latex: true,
+                typst: false,
             },
         );
 
@@ -1883,7 +2284,7 @@ $$\n";
             .to_path_buf();
         let tracked_files = vec![canonical_path];
 
-        let router = new_router(base_dir, tracked_files, false, false, opts, true)
+        let router = new_router(base_dir, tracked_files, false, false, opts, true, false)
             .expect("Failed to create router");
         let server = TestServer::new(router);
         (server, temp_file)

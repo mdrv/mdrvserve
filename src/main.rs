@@ -42,9 +42,17 @@ struct Args {
     #[arg(long = "with-latex")]
     with_latex: bool,
 
+    /// Render typst fenced blocks server-side via the `typst` binary (inlines SVG)
+    #[arg(long = "with-typst")]
+    with_typst: bool,
+
     /// Also serve `.html`/`.htm` files alongside markdown (directory mode)
     #[arg(long = "include-html")]
     include_html: bool,
+
+    /// Also serve `.typ` files alongside markdown, compiled to SVG via `typst` (directory mode)
+    #[arg(long = "include-typst")]
+    include_typst: bool,
 }
 
 #[tokio::main]
@@ -62,7 +70,7 @@ async fn main() -> Result<()> {
         (base_dir, tracked_files, false)
     } else if absolute_path.is_dir() {
         // Directory mode: scan directory for markdown files
-        let tracked_files = scan_markdown_files(&absolute_path, args.recursive, args.include_html)?;
+        let tracked_files = scan_markdown_files(&absolute_path, args.recursive, args.include_html, args.include_typst)?;
         if tracked_files.is_empty() {
             anyhow::bail!("No markdown files found in directory");
         }
@@ -84,8 +92,10 @@ async fn main() -> Result<()> {
             mermaid: args.with_mermaid,
             d2: args.with_d2,
             latex: args.with_latex,
+            typst: args.with_typst,
         },
         args.include_html,
+        args.include_typst,
     )
     .await?;
 

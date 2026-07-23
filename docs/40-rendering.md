@@ -1,9 +1,9 @@
 ```yaml
 mid: mdrvserve-rendering
 label: "40 — Rendering"
-description: Markdown → HTML pipeline, D2/Mermaid diagrams, the Svelte frontend, sidebar tree, and themes.
+description: Markdown → HTML pipeline, D2/Mermaid/LaTeX/Typst diagrams, the Svelte frontend, sidebar tree, and themes.
 time_created: 2026-06-26T00:00:00+07:00
-time_updated: 2026-07-13T00:00:00+07:00
+time_updated: 2026-07-23T00:00:00+07:00
 scores:
   mdrv/mdrvserve: 1000
   rendering: 900
@@ -11,7 +11,7 @@ scores:
   d2: 500
   svelte: 400
   themes: 300
-tags: [rendering, markdown, gfm, d2, mermaid, latex, svelte, themes]
+tags: [rendering, markdown, gfm, d2, mermaid, latex, typst, svelte, themes]
 tags_excluded: [minijinja, templates]
 ```
 
@@ -32,7 +32,7 @@ markdown.
 
 Both diagram engines are **opt-in** via CLI flags. With no flags, `` ```mermaid ``
 and `` ```d2 `` blocks render as plain fenced code — no payload, no latency.
-LaTeX math (`$...$` / `$$...$$`) is likewise opt-in.
+LaTeX math (`$...$` / `$$...$$`) and `` ```typst `` blocks are likewise opt-in.
 
 ### D2 (server-side, `--with-d2`)
 
@@ -83,6 +83,33 @@ glyphs.
 Like D2, LaTeX renders **server-side at render time** — the SVG is inlined
 into the stored HTML. No client JS, no external fonts.
 
+### Typst (server-side, `--with-typst` / `--include-typst`)
+
+Typst support has two distinct entry points, both rendered server-side by
+shelling out to the `typst` binary:
+
+- **`--with-typst`** enables the `` ```typst `` _fenced-block_ engine for
+  `.md`/`.html` content. Each block is piped to `typst compile - - --format svg`
+  (stdin → stdout) and replaced with
+  `<div class="typst-doc"><div class="typst-doc-page">…<svg/></div></div>`.
+  This mirrors the D2 pipeline exactly. Fenced blocks are single-page; a snippet
+  that overflows one page falls back to its source listing.
+- **`--include-typst`** tracks standalone `.typ` files in directory mode. The
+  whole file is compiled with a page-number template
+  (`page-{0p}-of-{t}.svg`) into a temp directory, so **multi-page documents**
+  are supported: each page becomes a `.typst-doc-page`, separated by an
+  `.typst-page-break` rule, all wrapped in `.typst-doc`.
+
+Typst's output model is paged paper, so the inlined SVGs carry their own white
+background and fixed layout. **On dark themes the pages are left white** (not
+inverted) — this preserves Typst's intended rendering, matching how a PDF or
+printed page would look.
+
+**Graceful degradation.** If the `typst` binary is not on `PATH`, mdrvserve
+logs a warning at startup; fenced blocks fall back to plain source listings and
+`.typ` files are served as an escaped `<pre><code class="language-typst">`
+listing. The page still serves.
+
 ## Frontend
 
 - **Stack:** [Svelte 5](https://svelte.dev/) + Vite, built to a single
@@ -130,7 +157,9 @@ listener are the pieces of client-side logic the Svelte app manages.
 All CSS lives in `frontend/src/app.css`, compiled into the inlined bundle at
 build time. D2 diagrams use the `.d2-diagram` wrapper class (centered,
 constrained to `max-width: 100%`). LaTeX uses `.latex-inline` (inline-block,
-`vertical-align: -0.25ex`) and `.latex-display` (flex, centered). Directory
+`vertical-align: -0.25ex`) and `.latex-display` (flex, centered). Typst uses
+`.typst-doc` (centered, `max-width: 100%`) with one `.typst-doc-page` per
+rendered page and an `.typst-page-break` rule between pages. Directory
 entries in the sidebar use the `.nav-dir` / `.nav-dir-name` classes, with
 nested `.file-list` indented. There is no external stylesheet to theme
 separately — keep it server-side and single-file.

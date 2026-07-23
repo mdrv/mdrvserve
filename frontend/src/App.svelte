@@ -21,6 +21,9 @@
 	let textZoom = $state(
 		parseFloat(localStorage.getItem('text-zoom') || '1') || 1,
 	)
+	let typstFlow = $state<'paged' | 'freeflow'>(
+		(localStorage.getItem('typst-flow') as 'paged' | 'freeflow') || 'paged',
+	)
 	let sidebarFilter = $state(localStorage.getItem('sidebar-filter') || '')
 	let showFilter = $state(
 		localStorage.getItem('sidebar-filter-open') === 'true',
@@ -48,6 +51,16 @@
 		document.documentElement.style.setProperty('--text-zoom', String(textZoom))
 		localStorage.setItem('text-zoom', String(textZoom))
 	})
+
+	$effect(() => {
+		localStorage.setItem('typst-flow', typstFlow)
+	})
+
+	let displayContent = $derived(
+		data.isTypst && typstFlow === 'freeflow'
+			? data.contentFreeflow
+			: data.content,
+	)
 
 	let mermaidApi: any = null
 	let mermaidLoading = false
@@ -179,12 +192,14 @@
 
 	<TopControls
 		bind:textZoom
+		bind:typstFlow
+		isTypst={data.isTypst}
 		{theme}
 		onopentheme={() => (showThemeModal = true)}
 		onopensource={() => (showSourceModal = true)}
 	/>
 
-	<div id='content'>{@html data.content}</div>
+	<div id='content'>{@html displayContent}</div>
 
 	<SourceModal
 		show={showSourceModal}

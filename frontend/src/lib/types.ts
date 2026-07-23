@@ -13,4 +13,6 @@ export interface ServerData {
 	pageTitle: string
 	showNavigation: boolean
 	mermaidEnabled: boolean
+	isTypst: boolean
+	contentFreeflow: string
 }

@@ -35,26 +35,29 @@ mdrvserve <PATH> [FLAGS]
 
 ## Flags
 
-| Flag             | Short | Type   | Default     | Purpose                                                                                                      |
-| ---------------- | ----- | ------ | ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `--hostname`     | `-H`  | string | `127.0.0.1` | Interface/domain to bind. Use `0.0.0.0` to expose on the LAN.                                                |
-| `--port`         | `-p`  | number | `3000`      | First port to try (see Port selection).                                                                      |
-| `--open`         | `-o`  | bool   | false       | Open the preview in the default browser on start.                                                            |
-| `--recursive`    | `-r`  | bool   | false       | Descend into subdirectories (directory mode only). See [20 — Modes](./20-modes.md).                          |
-| `--with-mermaid` |       | bool   | false       | Lazy-load bundled Mermaid JS for `` ```mermaid `` blocks (client-side).                                      |
-| `--with-d2`      |       | bool   | false       | Render `` ```d2 `` blocks to SVG via the `d2` binary (server-side). See [40 — Rendering](./40-rendering.md). |
-| `--with-latex`   |       | bool   | false       | Render `$...$` and `$$...$$` math to SVG via RaTeX (server-side). See [40 — Rendering](./40-rendering.md).   |
-| `--include-html` |       | bool   | false       | Track `.html`/`.htm` files in directory mode (with D2/LaTeX post-processing).                                |
-| `--help`         | `-h`  |        |             | Print help.                                                                                                  |
-| `--version`      | `-V`  |        |             | Print version.                                                                                               |
+| Flag              | Short | Type   | Default     | Purpose                                                                                                            |
+| ----------------- | ----- | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--hostname`      | `-H`  | string | `127.0.0.1` | Interface/domain to bind. Use `0.0.0.0` to expose on the LAN.                                                      |
+| `--port`          | `-p`  | number | `3000`      | First port to try (see Port selection).                                                                            |
+| `--open`          | `-o`  | bool   | false       | Open the preview in the default browser on start.                                                                  |
+| `--recursive`     | `-r`  | bool   | false       | Descend into subdirectories (directory mode only). See [20 — Modes](./20-modes.md).                                |
+| `--with-mermaid`  |       | bool   | false       | Lazy-load bundled Mermaid JS for `` ```mermaid `` blocks (client-side).                                            |
+| `--with-d2`       |       | bool   | false       | Render `` ```d2 `` blocks to SVG via the `d2` binary (server-side). See [40 — Rendering](./40-rendering.md).       |
+| `--with-latex`    |       | bool   | false       | Render `$...$` and `$$...$$` math to SVG via RaTeX (server-side). See [40 — Rendering](./40-rendering.md).         |
+| `--with-typst`    |       | bool   | false       | Render `` ```typst `` blocks to SVG via the `typst` binary (server-side). See [40 — Rendering](./40-rendering.md). |
+| `--include-html`  |       | bool   | false       | Track `.html`/`.htm` files in directory mode (with D2/LaTeX/Typst post-processing).                                |
+| `--include-typst` |       | bool   | false       | Track `.typ` files in directory mode, compiled to SVG page(s) via the `typst` binary.                              |
+| `--help`          | `-h`  |        |             | Print help.                                                                                                        |
+| `--version`       | `-V`  |        |             | Print version.                                                                                                     |
 
 ## Defaults
 
 - **Bind address:** `127.0.0.1:3000` — local only by default. Override with `--hostname` to expose.
 - **Mode:** inferred from whether `path` is a file or a directory. There is no `--mode` flag.
 - **Sidebar:** on for directory mode, off for single-file mode. Not a flag.
-- **Diagrams:** opt-in. Mermaid, D2, and LaTeX are off by default; pass `--with-mermaid`, `--with-d2`, or `--with-latex` to enable. Themes are always available.
+- **Diagrams:** opt-in. Mermaid, D2, LaTeX, and Typst are off by default; pass `--with-mermaid`, `--with-d2`, `--with-latex`, or `--with-typst` to enable. Themes are always available.
 - **HTML files:** markdown only by default. Pass `--include-html` to also track `.html`/`.htm` files in directory mode.
+- **Typst files:** pass `--include-typst` to also track `.typ` files in directory mode, each compiled to inlined SVG via the `typst` binary.
 
 ## Port selection
 

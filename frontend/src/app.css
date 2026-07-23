@@ -656,6 +656,76 @@ pre code {
 	height: auto;
 }
 
+/* Server-rendered Typst documents (inlined SVG via the `typst` binary). */
+.typst-doc {
+	margin: 16px 0;
+	text-align: center;
+	overflow: auto;
+	max-width: 100%;
+}
+
+.typst-doc-page {
+	display: inline-block;
+	max-width: 100%;
+}
+
+.typst-doc-page svg {
+	max-width: 100%;
+	height: auto;
+}
+
+/* Free-flow variant: one continuous sheet, transparent, theme-colored. */
+.typst-doc-freeflow {
+	color: var(--text-color);
+	text-align: left;
+}
+
+.typst-doc-freeflow .typst-doc-page {
+	display: block;
+}
+
+.typst-doc-freeflow .typst-doc-page svg {
+	width: 100%;
+	max-width: 100%;
+	height: auto;
+}
+
+/* No page breaks in free-flow mode. */
+.typst-doc-freeflow .typst-page-break {
+	display: none;
+}
+
+.typst-flow-btn {
+	background: var(--code-bg);
+	border: 1px solid var(--border-color-light);
+	border-radius: 8px;
+	width: 36px;
+	height: 36px;
+	cursor: pointer;
+	font-size: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: background var(--transition-speed) var(--transition-timing);
+}
+
+.typst-flow-btn:hover,
+.typst-flow-btn:focus-visible {
+	background: var(--border-color-light);
+	outline: none;
+}
+
+.typst-flow-btn.active {
+	border-color: var(--link-color);
+}
+
+.typst-page-break {
+	border: none;
+	border-top: 1px solid var(--border-color-light);
+	margin: 24px auto;
+	width: 80%;
+}
+
 /* Server-rendered LaTeX math (inlined SVG via RaTeX). */
 .latex-inline {
 	display: inline-block;

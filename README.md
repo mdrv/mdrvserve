@@ -26,8 +26,8 @@ WebSocket. This is the core interaction: an agent writes, a human reads.
 is not a long-running server and doesn't need to be.
 
 **Agent-friendly content.** GFM (tables, task lists, code blocks), opt-in
-D2 / Mermaid / LaTeX math support, HTML file serving (`--include-html`),
-and directory mode with a navigation sidebar — including `--recursive`
+D2 / Mermaid / LaTeX math / Typst support, HTML file serving (`--include-html`),
+Typst file serving (`--include-typst`), and directory mode with a navigation sidebar — including `--recursive`
 support for nested subdirectories shown as collapsible groups. Sidebar
 filter with wildcard patterns, source view, and scroll persistence round
 out the reading experience.
@@ -85,6 +85,10 @@ mdrvserve README.md --hostname 0.0.0.0 --port 8080 --open
 # Render D2 diagrams server-side, LaTeX math, or Mermaid client-side
 mdrvserve doc.md --with-d2 --with-latex --with-mermaid
 
+# Render typst fenced blocks, or serve standalone .typ files
+mdrvserve doc.md --with-typst
+mdrvserve docs/ --include-typst
+
 # Include HTML files alongside markdown in directory mode
 mdrvserve docs/ --include-html --with-latex
 ```
@@ -126,4 +130,5 @@ MIT — see [LICENSE](LICENSE).
 - Markdown parsing by [markdown-rs](https://github.com/wooorm/markdown-rs)
 - [Catppuccin](https://catppuccin.com/) color themes
 - LaTeX math rendering by [RaTeX](https://crates.io/crates/ratex-svg)
+- Typst rendering via the [typst](https://github.com/typst/typst) CLI
 - Part of the [MDRV](https://github.com/mdrv) ecosystem

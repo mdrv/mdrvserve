@@ -15,6 +15,8 @@ try {
 		pageTitle: 'mdrvserve',
 		showNavigation: false,
 		mermaidEnabled: false,
+		isTypst: false,
+		contentFreeflow: '',
 	}
 }
 
