@@ -54,8 +54,16 @@ jobs:
           if [ "$NEWEST" != "${GITHUB_REF_NAME}" ]; then
             echo "is_newest=false" >> "$GITHUB_OUTPUT"
             echo "Skipping crates.io publish: $GITHUB_REF_NAME is superseded by $NEWEST"
-          elif curl -fsSL "https://crates.io/api/v1/crates/mdrvserve" \
-              | grep -q "\"num\":\"${GITHUB_REF_NAME#v}\""; then
+            exit 0
+          fi
+          # crates.io rejects bare curl's User-Agent, and grep on an empty
+          # body would fall through to a doomed publish; fail loudly instead
+          RESP=$(curl -fsSL -H 'User-Agent: mdrvserve-ci (github.com/mdrv/mdrvserve)' \
+            "https://crates.io/api/v1/crates/mdrvserve") || {
+            echo "crates.io API unreachable; refusing to publish blind"
+            exit 1
+          }
+          if printf '%s' "$RESP" | grep -q "\"num\":\"${GITHUB_REF_NAME#v}\""; then
             echo "is_newest=false" >> "$GITHUB_OUTPUT"
             echo "Skipping crates.io publish: ${GITHUB_REF_NAME#v} is already published"
           else
