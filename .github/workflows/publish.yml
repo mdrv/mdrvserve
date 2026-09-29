@@ -14,6 +14,13 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+# Batch-pushed tags must never race on crates.io: a higher version landing
+# first makes every lower `cargo publish` fail. Serialize runs (queue, do not
+# cancel an in-flight publish).
+concurrency:
+  group: crates-io-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish to crates.io
@@ -39,7 +46,20 @@ jobs:
           fi
           echo "version $TAG_VERSION matches"
 
+      - name: Publish only if newest tag
+        id: latest
+        run: |
+          git fetch --tags --force --quiet
+          NEWEST=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n 1)
+          if [ "$NEWEST" != "${GITHUB_REF_NAME}" ]; then
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping crates.io publish: $GITHUB_REF_NAME is superseded by $NEWEST"
+          else
+            echo "is_newest=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
+        if: steps.latest.outputs.is_newest == 'true'
         run: cargo publish --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

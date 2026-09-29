@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, OnceLock},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     net::TcpListener,
@@ -1321,6 +1321,11 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
     let source = tracked.source.as_str();
     let is_typst = is_typst_file(std::path::Path::new(current_file));
     let content_freeflow = tracked.html_freeflow.as_deref().unwrap_or("");
+    let last_modified = tracked
+        .last_modified
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
 
     let has_mermaid = state.mermaid_enabled && content.contains(r#"class="language-mermaid""#);
 
@@ -1345,6 +1350,7 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
         "mermaidEnabled": has_mermaid,
         "isTypst": is_typst,
         "contentFreeflow": content_freeflow,
+        "lastModified": last_modified,
     });
 
     let mut json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".to_string());

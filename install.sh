@@ -1,275 +1,238 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+# install.sh -- install prebuilt mdrvserve on macOS & Linux in one command.
+# Downloads the right archive from GitHub Releases, verifies it against the
+# release's SHA256SUMS.txt, and installs the `mdrvserve` binary into
+# ~/.local/bin.
+#
+# Usage:
+#   curl -fsSL https://github.com/mdrv/mdrvserve/releases/latest/download/install.sh | sh
+#   sh install.sh [--version X.Y.Z] [--prefix DIR] [--no-path]
+#
+# Windows: use install.ps1 instead (same release page).
+# Upgrade any time by running it again.
 
-# mdrvserve installer script
-# Usage: curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
+set -eu
 
-# Repository information
-REPO_OWNER="mdrv"
-REPO_NAME="mdrvserve"
-BINARY_NAME="mdrvserve"
+REPO="mdrv/mdrvserve"
+REPO_URL="https://github.com/$REPO"
+API_URL="https://api.github.com/repos/$REPO"
+RELEASES_URL="$REPO_URL/releases"
 
-# Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[0;33m'
-NC='\033[0m' # No Color
+TMP=""
 
-# Cleanup function
 cleanup() {
-    if [ -n "${TEMP_FILE:-}" ] && [ -f "$TEMP_FILE" ]; then
-        rm -f "$TEMP_FILE"
-    fi
+	[ -n "$TMP" ] && rm -rf -- "$TMP"
+	return 0
+}
+trap cleanup EXIT INT TERM
+
+usage() {
+	cat <<'EOF'
+install.sh -- install prebuilt mdrvserve on macOS & Linux
+
+Usage:
+  curl -fsSL https://github.com/mdrv/mdrvserve/releases/latest/download/install.sh | sh
+  sh install.sh [options]
+
+Options:
+  --version X.Y.Z   install a specific release (default: latest)
+  --prefix DIR      install under DIR/bin (default: ~/.local)
+  --no-path         do not offer to add the binary dir to your shell rc
+  -h, --help        show this help
+
+Environment:
+  MDRVSERVE_VERSION   same as --version
+  MDRVSERVE_PREFIX    same as --prefix
+
+Windows: use install.ps1 from the same release page.
+EOF
 }
 
-# Set trap for cleanup
-trap cleanup EXIT
+info() { printf '==> %s\n' "$1"; }
+err() { printf 'install.sh: error: %s\n' "$1" >&2; exit 1; }
 
-# Logging functions
-info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+VERSION="${MDRVSERVE_VERSION:-}"
+PREFIX="${MDRVSERVE_PREFIX:-$HOME/.local}"
+ADD_PATH=1
 
-success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--version)
+			[ $# -ge 2 ] || err "--version needs a value"
+			VERSION="$2"
+			shift 2
+			;;
+		--version=*)
+			VERSION="${1#--version=}"
+			shift
+			;;
+		--prefix)
+			[ $# -ge 2 ] || err "--prefix needs a value"
+			PREFIX="$2"
+			shift 2
+			;;
+		--prefix=*)
+			PREFIX="${1#--prefix=}"
+			shift
+			;;
+		--no-path)
+			ADD_PATH=0
+			shift
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
+		*)
+			err "unknown option: $1 (try --help)"
+			;;
+	esac
+done
 
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+# Map the machine to a release target. Release archives:
+#   {x86_64,aarch64}-unknown-linux-musl (static), armv7-unknown-linux-musleabihf
+#   (static; for entware/ASUS routers), {x86_64,aarch64}-apple-darwin
+OS="$(uname -s)"
+case "$OS" in
+	Darwin) ;;
+	Linux) ;;
+	*) err "unsupported OS: $OS -- on Windows use install.ps1 (same release page)" ;;
+esac
+case "$(uname -m)" in
+	x86_64) ARCH="x86_64" ;;
+	arm64 | aarch64) ARCH="aarch64" ;;
+	armv7l | armv7 | armv8l | armhf) ARCH="armv7" ;;
+	*) err "unsupported architecture: $(uname -m) ($OS)" ;;
+esac
+if [ "$OS" = "Darwin" ]; then
+	TARGET="$ARCH-apple-darwin"
+elif [ "$ARCH" = "armv7" ]; then
+	TARGET="armv7-unknown-linux-musleabihf"
+else
+	TARGET="$ARCH-unknown-linux-musl"
+fi
 
-error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
+command -v curl >/dev/null 2>&1 || err "curl is required"
+# First available tool wins; the archive is only verified if one exists.
+sha_tool=""
+if command -v sha256sum >/dev/null 2>&1; then
+	sha_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+	sha_tool="shasum"
+elif command -v openssl >/dev/null 2>&1; then
+	sha_tool="openssl"
+fi
 
-fatal() {
-    error "$1"
-    exit 1
-}
+# Resolve the release tag. Asset names embed the tag:
+#   mdrvserve-<tag>-<target>.tar.gz
+if [ -n "$VERSION" ]; then
+	TAG="v${VERSION#v}"
+	info "resolving release $TAG"
+else
+	info "resolving latest mdrvserve release"
+	RELEASE_JSON=$(curl -fsSL "$API_URL/releases/latest") || err "could not reach the GitHub API (rate limited? pin a release with --version X.Y.Z)"
+	TAG=$(printf '%s\n' "$RELEASE_JSON" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
+	[ -n "$TAG" ] || err "could not determine the latest release (pin one with --version X.Y.Z)"
+fi
 
-# Check if command exists
-has_command() {
-    command -v "$1" >/dev/null 2>&1
-}
+ASSET="mdrvserve-$TAG-$TARGET.tar.gz"
+DIR="mdrvserve-$TAG-$TARGET"
+BASE_URL="$RELEASES_URL/download/$TAG"
+BINDIR="$PREFIX/bin"
 
-# Download function that tries curl first, then wget
-download() {
-    local url="$1"
-    local output="$2"
+OLD_VERSION=""
+if [ -x "$BINDIR/mdrvserve" ]; then
+	OLD_VERSION=$("$BINDIR/mdrvserve" --version 2>/dev/null || true)
+fi
 
-    if has_command curl; then
-        curl -sSfL "$url" -o "$output"
-    elif has_command wget; then
-        wget -q "$url" -O "$output"
-    else
-        fatal "Neither curl nor wget is available. Please install one of them."
-    fi
-}
+TMP=$(mktemp -d)
 
-# Get latest release tag from GitHub API
-get_latest_release() {
-    local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
-    local response
+info "downloading $ASSET"
+curl -fsSL "$BASE_URL/$ASSET" -o "$TMP/$ASSET" || err "download failed: $BASE_URL/$ASSET"
 
-    if has_command curl; then
-        response=$(curl -sSf "$api_url")
-    elif has_command wget; then
-        response=$(wget -qO- "$api_url")
-    else
-        fatal "Neither curl nor wget is available. Please install one of them."
-    fi
+# Verify against the release's own SHA256SUMS.txt.
+info "downloading SHA256SUMS.txt"
+if curl -fsSL "$BASE_URL/SHA256SUMS.txt" -o "$TMP/SHA256SUMS.txt"; then
+	EXPECTED=$(grep -E "^[0-9a-f]{64}[[:space:]]+\*?$(printf '%s' "$ASSET" | sed 's/[][\.*^$/]/\\&/g')$" "$TMP/SHA256SUMS.txt" | head -n 1 | cut -d ' ' -f1)
+	if [ -n "$EXPECTED" ]; then
+		if [ -z "$sha_tool" ]; then
+			err "no sha256 tool found (sha256sum/shasum/openssl)"
+		else
+			info "verifying sha256 ($EXPECTED)"
+			actual=""
+			case "$sha_tool" in
+				sha256sum) actual=$(sha256sum "$TMP/$ASSET" | cut -d ' ' -f1) ;;
+				shasum) actual=$(shasum -a 256 "$TMP/$ASSET" | cut -d ' ' -f1) ;;
+				openssl) actual=$(openssl dgst -sha256 -r "$TMP/$ASSET" | cut -d ' ' -f1) ;;
+			esac
+			[ "$actual" = "$EXPECTED" ] || err "checksum mismatch -- the download is corrupted or was tampered with"
+		fi
+	else
+		err "no checksum for $ASSET in SHA256SUMS.txt"
+	fi
+else
+	err "no SHA256SUMS.txt published for this release"
+fi
 
-    # Extract tag_name from JSON response (simple grep/sed approach to avoid jq dependency)
-    echo "$response" | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
-}
+info "extracting"
+tar -xzf "$TMP/$ASSET" -C "$TMP" || err "extraction failed"
+SRC="$TMP/$DIR/mdrvserve"
+[ -x "$SRC" ] || err "unexpected archive layout ($DIR/mdrvserve not found)"
 
-# Detect platform and architecture
-detect_platform() {
-    local os arch
+mkdir -p "$BINDIR" 2>/dev/null || err "cannot create $BINDIR (use --prefix or run under sudo)"
+info "installing into $BINDIR"
+install -m 0755 "$SRC" "$BINDIR/mdrvserve" || err "could not write to $BINDIR (use --prefix or run under sudo)"
 
-    os=$(uname -s)
-    arch=$(uname -m)
+NEW_VERSION=$("$BINDIR/mdrvserve" --version)
 
-    # Normalize OS
-    case "$os" in
-        Linux*) os="linux" ;;
-        Darwin*) os="darwin" ;;
-        CYGWIN*|MINGW*|MSYS*) fatal "Windows is not currently supported" ;;
-        *) fatal "Unsupported operating system: $os" ;;
-    esac
+# PATH: pick the rc file matching the login shell (zsh on stock macOS,
+# bash on most Linux distros). Offers to append an export line when running
+# interactively; otherwise prints the instructions. Never touches rc files
+# without an answer.
+rc="$HOME/.bashrc"
+case "${SHELL:-}" in
+	*zsh*) rc="$HOME/.zshrc" ;;
+esac
 
-    # Normalize architecture
-    case "$arch" in
-        x86_64|amd64) arch="x86_64" ;;
-        aarch64|arm64) arch="aarch64" ;;
-        armv7l) arch="armv7" ;;
-        *) fatal "Unsupported architecture: $arch" ;;
-    esac
+on_path=0
+case ":$PATH:" in
+	*":$BINDIR:"*) on_path=1 ;;
+esac
+path_action="already-on-path"
+if [ "$on_path" = 0 ]; then
+	path_action="manual"
+	if [ "$ADD_PATH" = 1 ] && [ -t 0 ] && [ -t 1 ]; then
+		if [ -f "$rc" ] && grep -qF "$BINDIR" "$rc"; then
+			path_action="already-in-rc"
+		else
+			printf '\n%s is not on your PATH.\nAdd it to %s? [y/N] ' "$BINDIR" "$rc"
+			read -r answer || answer=""
+			case "$answer" in
+				y | Y | yes | Yes | YES)
+					printf '\n# Added by mdrvserve installer\nexport PATH="%s:$PATH"\n' "$BINDIR" >>"$rc"
+					path_action="added"
+					;;
+			esac
+		fi
+	fi
+fi
 
-    # Map to binary names used in releases
-    case "$os-$arch" in
-        linux-x86_64) echo "x86_64-unknown-linux-musl" ;;
-        linux-aarch64) echo "aarch64-unknown-linux-musl" ;;
-        linux-armv7) echo "armv7-unknown-linux-musleabihf" ;;
-        darwin-x86_64) echo "x86_64-apple-darwin" ;;
-        darwin-aarch64) echo "aarch64-apple-darwin" ;;
-        *) fatal "No binary available for $os-$arch" ;;
-    esac
-}
-
-# Find the best installation directory
-find_install_dir() {
-    # Check for user override
-    if [ -n "${MDRVSERVE_INSTALL_DIR:-}" ]; then
-        echo "$MDRVSERVE_INSTALL_DIR"
-        return
-    fi
-
-    # Try system-wide directory first (if we can write to it)
-    if [ -w "/usr/local/bin" ] || [ "$EUID" = 0 ]; then
-        echo "/usr/local/bin"
-        return
-    fi
-
-    # Try user directories
-    for dir in "$HOME/.local/bin" "$HOME/bin"; do
-        if [ -d "$dir" ] && [ -w "$dir" ]; then
-            echo "$dir"
-            return
-        fi
-    done
-
-    # Create ~/.local/bin if it doesn't exist (XDG standard)
-    local local_bin="$HOME/.local/bin"
-    if mkdir -p "$local_bin" 2>/dev/null; then
-        echo "$local_bin"
-        return
-    fi
-
-    # Final fallback
-    local fallback_dir="$HOME/.mdrvserve/bin"
-    mkdir -p "$fallback_dir"
-    echo "$fallback_dir"
-}
-
-# Check if directory is in PATH
-is_in_path() {
-    local dir="$1"
-    case ":$PATH:" in
-        *":$dir:"*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# Main installation function
-install_mdrvserve() {
-    info "Installing $BINARY_NAME..."
-
-    # Detect platform
-    info "Detecting platform..."
-    local target
-    target=$(detect_platform)
-    info "Detected platform: $target"
-
-    # Get latest release
-    info "Fetching latest release information..."
-    local version
-    version=$(get_latest_release)
-    if [ -z "$version" ]; then
-        fatal "Failed to get latest release information"
-    fi
-    info "Latest release: $version"
-
-    # Construct download URL
-    local binary_name="${BINARY_NAME}-${target}"
-    local download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${version}/${binary_name}"
-
-    # Create temporary file
-    TEMP_FILE=$(mktemp)
-
-    # Download binary
-    info "Downloading $binary_name..."
-    if ! download "$download_url" "$TEMP_FILE"; then
-        fatal "Failed to download binary from $download_url"
-    fi
-
-    # Find installation directory
-    local install_dir
-    install_dir=$(find_install_dir)
-    info "Installing to: $install_dir"
-
-    # Check if we need sudo for system directory
-    local use_sudo=""
-    if [ "$install_dir" = "/usr/local/bin" ] && [ "$EUID" != 0 ] && [ ! -w "$install_dir" ]; then
-        if has_command sudo; then
-            info "Administrator privileges required for system installation"
-            use_sudo="sudo"
-        else
-            fatal "Cannot write to $install_dir and sudo is not available"
-        fi
-    fi
-
-    # Install binary
-    local install_path="$install_dir/$BINARY_NAME"
-    if [ -n "$use_sudo" ]; then
-        $use_sudo cp "$TEMP_FILE" "$install_path"
-        $use_sudo chmod +x "$install_path"
-    else
-        cp "$TEMP_FILE" "$install_path"
-        chmod +x "$install_path"
-    fi
-
-    # Verify installation
-    if [ ! -x "$install_path" ]; then
-        fatal "Installation failed: $install_path is not executable"
-    fi
-
-    # Test the binary
-    if ! "$install_path" --version >/dev/null 2>&1; then
-        warn "Binary installed but --version check failed. This might be normal if the binary doesn't support --version."
-    fi
-
-    success "$BINARY_NAME $version installed successfully to $install_path"
-
-    # Check PATH
-    if ! is_in_path "$install_dir"; then
-        warn "⚠️  $install_dir is not in your PATH"
-        info "Add it to your PATH by adding this line to your shell profile:"
-        echo "    export PATH=\"$install_dir:\$PATH\""
-        echo ""
-        info "Or run the binary directly: $install_path"
-    else
-        info "✅ You can now run: $BINARY_NAME"
-    fi
-}
-
-# Script entry point
-main() {
-    # Check for help flag
-    for arg in "$@"; do
-        case "$arg" in
-            -h|--help)
-                echo "mdrvserve installer"
-                echo ""
-                echo "Usage: $0 [options]"
-                echo ""
-                echo "Environment variables:"
-                echo "  MDRVSERVE_INSTALL_DIR   Override installation directory"
-                echo ""
-                echo "Examples:"
-                echo "  # Install to default location"
-                echo "  curl -sSfL https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/install.sh | bash"
-                echo ""
-                echo "  # Install to custom directory"
-                echo "  MDRVSERVE_INSTALL_DIR=~/my-tools curl -sSfL ... | bash"
-                exit 0
-                ;;
-        esac
-    done
-
-    install_mdrvserve
-}
-
-# Run main function with all arguments
-main "$@"
+printf '\n'
+info "mdrvserve $NEW_VERSION installed ($BINDIR/mdrvserve)"
+if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$NEW_VERSION" ]; then
+	info "upgraded from $OLD_VERSION"
+fi
+case "$path_action" in
+	already-on-path | already-in-rc | added)
+		if [ "$path_action" = "added" ]; then
+			printf '    PATH updated in %s -- open a new terminal, then run:  mdrvserve --help\n' "$rc"
+		else
+			printf '    Start with:  mdrvserve --help\n'
+		fi
+		;;
+	manual)
+		printf '    Add mdrvserve to your PATH by putting this in %s:\n        export PATH="%s:$PATH"\n    Then run:  mdrvserve --help\n' "$rc" "$BINDIR"
+		;;
+esac
+printf '    Start a preview:  mdrvserve file.md\n'
+printf '    Upgrade:   run this script again\n'

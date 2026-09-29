@@ -4,27 +4,30 @@
 
 mdrvserve is a markdown preview server built as a companion for AI coding agents.
 See the [README](README.md) for project overview and the
-[architecture doc](docs/architecture.md) for design details.
+[architecture doc](docs/10-architecture.md) for design details.
 
 ## Build and test
 
 ```bash
+just build-frontend                   # only needed after frontend/ changes
 cargo build --release
 cargo test                            # all tests
 cargo test --test integration_test    # integration tests only
 ```
 
-Rust 1.82+, 2021 edition. Templates are embedded at compile time via
-minijinja-embed (changes to `templates/` require a rebuild).
+Rust 1.82+, 2021 edition. The Svelte 5 frontend is compiled to a single
+inlined `frontend/dist/index.html` (`just build-frontend`) and embedded into
+the binary via `include_str!`, so frontend changes require a rebuild.
 
 ## Project structure
 
 - `src/main.rs` - CLI parsing and entry point
-- `src/app.rs` - Axum router, handlers, state management, file watcher
-- `src/lib.rs` - Markdown rendering
-- `templates/` - MiniJinja templates (Jinja2 syntax), embedded at compile time
+- `src/app.rs` - Axum router, handlers, state management, file watcher, markdown rendering
+- `frontend/` - Svelte 5 app; built to `frontend/dist/index.html` and embedded at compile time
+- `static/` - assets embedded at compile time (mermaid.min.js)
 - `tests/integration_test.rs` - Integration tests using axum-test
 - `examples/` - Sample Markdown/HTML/Typst files (Japanese competitive-programming lessons) for trying every rendering engine
+- `install.sh` / `install.ps1` - installers attached to every GitHub Release
 
 ## Design constraints
 
@@ -39,16 +42,16 @@ minijinja-embed (changes to `templates/` require a rebuild).
   only reads file contents and builds the index (no rendering), so large
   directories boot fast. Serving is always from memory.
 - **Minimal client-side JS.** Most logic is server-side. Client JS handles
-  theme selection and WebSocket reload only.
+  theme selection, the WebSocket reload, scroll restoration, and small reading
+  affordances (copy button, last-modified label).
 
 ## Changelog
 
-Generated with [git-cliff](https://git-cliff.org/) using `cliff.toml`. To
-update `CHANGELOG.md`:
-
-```bash
-git cliff -o CHANGELOG.md
-```
+Managed by lhg: complete entries (a `yaml` block with `mid: vX.Y.Z` plus a
+`## vX.Y.Z — Title` section) are prepended to `docs/changelogs/v267.x.md`,
+newest first; `docs/changelogs/CHANGELOG.md` is the series index. Release
+notes are extracted from the entry's `mid:` block, so the entry must exist
+before the tag is pushed.
 
 ## Commits
 

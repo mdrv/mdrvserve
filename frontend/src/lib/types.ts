@@ -15,4 +15,5 @@ export interface ServerData {
 	mermaidEnabled: boolean
 	isTypst: boolean
 	contentFreeflow: string
+	lastModified: number
 }

@@ -118,6 +118,47 @@
 		}
 	})
 
+	$effect(() => {
+		// Re-runs when the rendered content changes (e.g. Typst flow toggle).
+		// Declared after the mermaid effect so mermaid blocks are already
+		// replaced and get no copy button.
+		void displayContent
+		document.querySelectorAll('#content pre').forEach((pre) => {
+			if (pre.querySelector('.copy-btn')) return
+			const code = pre.querySelector('code')
+			if (code?.classList.contains('language-mermaid')) return
+			const btn = document.createElement('button')
+			btn.className = 'copy-btn'
+			btn.type = 'button'
+			btn.textContent = 'Copy'
+			btn.addEventListener('click', () => {
+				copyText(code?.textContent ?? pre.textContent ?? '').then(() => {
+					btn.textContent = 'Copied'
+					setTimeout(() => (btn.textContent = 'Copy'), 1500)
+				})
+			})
+			pre.appendChild(btn)
+		})
+	})
+
+	function copyText(text: string): Promise<void> {
+		if (navigator.clipboard?.writeText) {
+			return navigator.clipboard.writeText(text)
+		}
+		// Fallback for non-secure contexts (e.g. LAN access over http).
+		return new Promise((resolve, reject) => {
+			const ta = document.createElement('textarea')
+			ta.value = text
+			ta.style.position = 'fixed'
+			ta.style.opacity = '0'
+			document.body.appendChild(ta)
+			ta.select()
+			if (document.execCommand('copy')) resolve()
+			else reject(new Error('copy failed'))
+			ta.remove()
+		})
+	}
+
 	onMount(() => {
 		const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 		const url = `${proto}//${window.location.host}/ws`
@@ -140,9 +181,31 @@
 			}
 		}
 
+		// Content scroll restoration across WebSocket-triggered reloads:
+		// save on scroll/pagehide, restore after the reload paints.
+		const scrollKey = 'mdrv-scroll-' + window.location.pathname
+		const saved = sessionStorage.getItem(scrollKey)
+		if (saved !== null) {
+			requestAnimationFrame(() => window.scrollTo(0, parseInt(saved, 10)))
+		}
+		let saveTimer: ReturnType<typeof setTimeout>
+		const saveScroll = () => {
+			clearTimeout(saveTimer)
+			saveTimer = setTimeout(() => {
+				sessionStorage.setItem(scrollKey, String(window.scrollY))
+			}, 100)
+		}
+		const saveScrollNow = () =>
+			sessionStorage.setItem(scrollKey, String(window.scrollY))
+		window.addEventListener('scroll', saveScroll, { passive: true })
+		window.addEventListener('pagehide', saveScrollNow)
+
 		connect()
 
 		return () => {
+			window.removeEventListener('scroll', saveScroll)
+			window.removeEventListener('pagehide', saveScrollNow)
+			clearTimeout(saveTimer)
 			closed = true
 			clearTimeout(timer)
 			ws.close()
@@ -198,6 +261,7 @@
 		bind:textZoom
 		bind:typstFlow
 		isTypst={data.isTypst}
+		lastModified={data.lastModified}
 		freeflowAvailable={freeflowAvailable}
 		{theme}
 		onopentheme={() => (showThemeModal = true)}

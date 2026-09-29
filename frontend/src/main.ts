@@ -17,6 +17,7 @@ try {
 		mermaidEnabled: false,
 		isTypst: false,
 		contentFreeflow: '',
+		lastModified: 0,
 	}
 }
 

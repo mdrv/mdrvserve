@@ -1,6 +1,6 @@
 [package]
 name = "mdrvserve"
-version = "267.4.0"
+version = "267.5.0"
 categories = ["command-line-utilities", "web-programming"]
 documentation = "https://github.com/mdrv/mdrvserve#readme"
 edition = "2021"
@@ -12,6 +12,7 @@ exclude = [
 	"prek.toml",
 	"dprint.jsonc",
 	"install.sh",
+	"install.ps1",
 	"frontend/node_modules/",
 	"frontend/src/",
 ]

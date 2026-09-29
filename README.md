@@ -46,13 +46,21 @@ samples exercises every rendering engine end to end.
 
 ## Installation
 
-### Linux
+### Linux & macOS
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
+curl -fsSL https://github.com/mdrv/mdrvserve/releases/latest/download/install.sh | sh
 ```
 
-Detects your platform (Linux, macOS, Windows) and installs the latest binary.
+Verifies checksums and installs into `~/.local/bin`. Rerun to upgrade; supports `--version`, `--prefix`, and `--no-path`. armv7 (entware/ASUS routers) is covered.
+
+### Windows (PowerShell)
+
+```powershell
+irm https://github.com/mdrv/mdrvserve/releases/latest/download/install.ps1 | iex
+```
+
+Installs into `%LOCALAPPDATA%\Programs\mdrvserve` and adds it to your PATH. x64 and ARM64.
 
 ### Other methods
 
@@ -71,7 +79,7 @@ cargo build --release
 cp target/release/mdrvserve <folder in your PATH>
 ```
 
-Or download a binary from the [latest release](https://github.com/mdrv/mdrvserve/releases/latest).
+Or grab an archive from the [latest release](https://github.com/mdrv/mdrvserve/releases/latest); a `SHA256SUMS.txt` covers every asset.
 
 ## Usage
 

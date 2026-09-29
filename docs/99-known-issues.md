@@ -37,5 +37,5 @@ genuinely rough, and what has been decided against.
 - **Authentication, TLS, multi-user serving.** mdrvserve binds to localhost and assumes a trusted single user.
 - **Config files.** Zero-config is a hard constraint; behaviour is flags-only.
 - **Client-side markdown parsing or fetch-based content loading.** The browser receives fully rendered HTML; there is no client-side router or API fetching.
-- **Search, backlinks, graph views.** That is a knowledge-base tool's job (see NX).
+- **Search, backlinks, graph views.** That is a knowledge-base tool's job.
 - **Persistence, history, daemon mode.** mdrvserve is ephemeral by design.

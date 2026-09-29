@@ -29,11 +29,11 @@ tags_excluded: []
 Pick one:
 
 ```bash
-# macOS
-brew install mdrvserve
+# Linux & macOS (verifies checksums, installs to ~/.local/bin)
+curl -fsSL https://github.com/mdrv/mdrvserve/releases/latest/download/install.sh | sh
 
-# Linux (detects platform, installs latest binary)
-curl -sSfL https://raw.githubusercontent.com/mdrv/mdrvserve/main/install.sh | bash
+# Windows (PowerShell, x64 and ARM64)
+irm https://github.com/mdrv/mdrvserve/releases/latest/download/install.ps1 | iex
 
 # Elsewhere
 cargo install mdrvserve        # Cargo
