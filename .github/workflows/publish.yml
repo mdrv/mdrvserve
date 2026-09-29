@@ -46,7 +46,7 @@ jobs:
           fi
           echo "version $TAG_VERSION matches"
 
-      - name: Publish only if newest tag
+      - name: Publish only if newest and unpublished
         id: latest
         run: |
           git fetch --tags --force --quiet
@@ -54,6 +54,10 @@ jobs:
           if [ "$NEWEST" != "${GITHUB_REF_NAME}" ]; then
             echo "is_newest=false" >> "$GITHUB_OUTPUT"
             echo "Skipping crates.io publish: $GITHUB_REF_NAME is superseded by $NEWEST"
+          elif curl -fsSL "https://crates.io/api/v1/crates/mdrvserve" \
+              | grep -q "\"num\":\"${GITHUB_REF_NAME#v}\""; then
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping crates.io publish: ${GITHUB_REF_NAME#v} is already published"
           else
             echo "is_newest=true" >> "$GITHUB_OUTPUT"
           fi

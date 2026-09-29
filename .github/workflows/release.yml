@@ -68,9 +68,26 @@ jobs:
       - name: Smoke the binary
         shell: bash
         run: |
+          T=${{ matrix.target }}
           EXE=""
-          case ${{ matrix.target }} in *windows*) EXE=.exe ;; esac
-          target/${{ matrix.target }}/release/mdrvserve$EXE --version
+          case $T in *windows*) EXE=.exe ;; esac
+          B=target/$T/release/mdrvserve$EXE
+          case $T in
+            armv7-*)
+              # cross-compiled ARM: the x64 runner cannot execute the ELF
+              # directly; run it under qemu-user-static instead
+              command -v qemu-arm-static >/dev/null 2>&1 || \
+                sudo apt-get install -y qemu-user-static
+              qemu-arm-static $B --version
+              ;;
+            aarch64-pc-windows-msvc)
+              # cross-compiled ARM64 PE: nothing on the x64 runner executes it
+              echo "$T is cross-compiled; skipping run smoke"
+              ;;
+            *)
+              $B --version
+              ;;
+          esac
       - name: Package
         shell: bash
         run: |
