@@ -137,6 +137,20 @@ each as `<div class='markdown-alert markdown-alert-{kind}'>` with a titled
 header and GitHub-matching hues (see `.markdown-alert*` in `app.css`). Plain
 blockquotes pass through untouched. Client JS: none.
 
+### Frontmatter table (server-side, `--with-frontmatter`)
+
+A leading YAML frontmatter block (`---` ... `---`) renders as a two-column
+key/value table above the document, GitHub-style. The parse is deliberately
+shallow, in document order:
+
+- `key: value` scalars, with one layer of quotes stripped
+- `- item` lists joined with ", "
+- nested maps flattened to dotted keys (`config.theme`)
+- block scalars (`|`, `>`) collected with their continuation lines
+- values HTML-escaped
+
+Without the flag the block is swallowed, exactly as before.
+
 ## Frontend
 
 - **Stack:** [Svelte 5](https://svelte.dev/) + Vite, built to a single
@@ -152,15 +166,15 @@ blockquotes pass through untouched. Client JS: none.
 
 ### Server data fields
 
-| Field            | Type          | Purpose                                                              |
-| ---------------- | ------------- | -------------------------------------------------------------------- |
-| `content`        | string (HTML) | The rendered markdown body, cached on first request.                 |
-| `navItems`       | NavNode[]     | The sidebar tree (directory mode only). Empty when nav is off.       |
-| `pageTitle`      | string        | Filename stem, used for the `<title>`.                               |
-| `showNavigation` | boolean       | Whether to render the sidebar (directory mode only).                 |
-| `mermaidEnabled` | boolean       | Whether the page contains mermaid blocks AND `--with-mermaid` is on. |
-| `isTypst`        | boolean       | Whether the source is a `.typ` file (controls the free-flow toggle).  |
-| `contentFreeflow`| string (HTML) | HTML-export free-flow rendering; empty when the feature is unavailable.|
+| Field             | Type          | Purpose                                                                 |
+| ----------------- | ------------- | ----------------------------------------------------------------------- |
+| `content`         | string (HTML) | The rendered markdown body, cached on first request.                    |
+| `navItems`        | NavNode[]     | The sidebar tree (directory mode only). Empty when nav is off.          |
+| `pageTitle`       | string        | Filename stem, used for the `<title>`.                                  |
+| `showNavigation`  | boolean       | Whether to render the sidebar (directory mode only).                    |
+| `mermaidEnabled`  | boolean       | Whether the page contains mermaid blocks AND `--with-mermaid` is on.    |
+| `isTypst`         | boolean       | Whether the source is a `.typ` file (controls the free-flow toggle).    |
+| `contentFreeflow` | string (HTML) | HTML-export free-flow rendering; empty when the feature is unavailable. |
 
 ## Sidebar tree
 

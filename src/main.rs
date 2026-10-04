@@ -58,6 +58,10 @@ struct Args {
     #[arg(long = "with-gfm", visible_alias = "gfm")]
     with_gfm: bool,
 
+    /// Render leading YAML frontmatter as a key/value table (GitHub-style)
+    #[arg(long = "with-frontmatter")]
+    with_frontmatter: bool,
+
     /// Also serve `.html`/`.htm` files alongside markdown (directory mode)
     #[arg(long = "include-html")]
     include_html: bool,
@@ -117,6 +121,7 @@ async fn main() -> Result<()> {
             latex: args.with_latex,
             typst: args.with_typst,
             gfm: args.with_gfm,
+            frontmatter: args.with_frontmatter,
         },
         args.include_html,
         args.include_typst,

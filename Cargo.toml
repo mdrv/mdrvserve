@@ -1,6 +1,6 @@
 [package]
 name = "mdrvserve"
-version = "267.5.0"
+version = "267.6.0"
 categories = ["command-line-utilities", "web-programming"]
 documentation = "https://github.com/mdrv/mdrvserve#readme"
 edition = "2021"

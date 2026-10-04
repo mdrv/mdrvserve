@@ -868,6 +868,10 @@ th {
 	font-weight: bold;
 }
 
+table.frontmatter td:first-child {
+	white-space: nowrap;
+}
+
 h1, h2, h3, h4, h5, h6 {
 	margin-top: 24px;
 	margin-bottom: 16px;

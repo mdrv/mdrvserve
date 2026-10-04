@@ -54,6 +54,9 @@ pub(crate) struct DiagramOpts {
 
     /// Render GitHub-flavored alert callouts (`> [!NOTE]`, ...) server-side.
     pub gfm: bool,
+
+    /// Render leading YAML frontmatter as a key/value table (GitHub-style).
+    pub frontmatter: bool,
 }
 
 type SharedMarkdownState = Arc<Mutex<MarkdownState>>;
@@ -170,6 +173,7 @@ struct MarkdownState {
     latex_enabled: bool,
     typst_enabled: bool,
     gfm_enabled: bool,
+    frontmatter_enabled: bool,
     include_html: bool,
     include_typst: bool,
     change_tx: broadcast::Sender<ServerMessage>,
@@ -213,6 +217,7 @@ impl MarkdownState {
             latex_enabled: opts.latex,
             typst_enabled: opts.typst,
             gfm_enabled: opts.gfm,
+            frontmatter_enabled: opts.frontmatter,
             include_html,
             include_typst,
             change_tx,
@@ -315,10 +320,17 @@ impl MarkdownState {
             latex: self.latex_enabled,
             typst: self.typst_enabled,
             gfm: self.gfm_enabled,
+            frontmatter: self.frontmatter_enabled,
         }
     }
 
     fn markdown_to_html(content: &str, opts: DiagramOpts) -> Result<String> {
+        let (frontmatter_table, content) = if opts.frontmatter {
+            Self::split_frontmatter(content)
+        } else {
+            (None, content)
+        };
+
         let mut options = markdown::Options::gfm();
         options.compile.allow_dangerous_html = true;
         options.parse.constructs.frontmatter = true;
@@ -331,6 +343,10 @@ impl MarkdownState {
 
         let mut html_body = markdown::to_html_with_options(content, &options)
             .unwrap_or_else(|_| "Error parsing markdown".to_string());
+
+        if let Some(table) = frontmatter_table {
+            html_body = table + &html_body;
+        }
 
         if opts.d2 {
             html_body = render_d2_blocks(&html_body);
@@ -349,6 +365,160 @@ impl MarkdownState {
         }
 
         Ok(html_body)
+    }
+
+    /// Split a leading YAML frontmatter block off `content` and render it as
+    /// a two-column key/value table. Returns `(Some(table), rest)` when the
+    /// file starts with a well-formed `---` block and at least one entry
+    /// parses out of it. An unterminated block is left for the markdown
+    /// crate, which renders it as a thematic break.
+    fn split_frontmatter(content: &str) -> (Option<String>, &str) {
+        let after_open = match content
+            .strip_prefix("---\r\n")
+            .or_else(|| content.strip_prefix("---\n"))
+        {
+            Some(rest) => rest,
+            None => return (None, content),
+        };
+
+        let mut yaml = String::new();
+        let mut consumed = 0;
+        for line in after_open.split_inclusive('\n') {
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed == "---" || trimmed == "..." {
+                let entries = Self::parse_yaml_shallow(&yaml);
+                if entries.is_empty() {
+                    return (None, content);
+                }
+                let rest = &after_open[consumed + line.len()..];
+                return (Some(Self::render_frontmatter_table(&entries)), rest);
+            }
+            consumed += line.len();
+            yaml.push_str(line);
+        }
+        (None, content)
+    }
+
+    /// Shallow YAML parse in document order: top-level scalars, `- item`
+    /// lists joined with ", ", and nested maps flattened to dotted keys
+    /// (`config.theme`). Deliberately not a YAML implementation — just
+    /// enough structure for document frontmatter.
+    fn parse_yaml_shallow(yaml: &str) -> Vec<(String, String)> {
+        const BLOCK_SCALARS: [&str; 6] = ["|", "|-", "|+", ">", ">-", ">+"];
+
+        let mut entries: Vec<(String, String)> = Vec::new();
+        let mut path: Vec<String> = Vec::new();
+
+        for raw in yaml.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some(item) = line.strip_prefix("- ") {
+                if let Some(last) = entries.last_mut() {
+                    if !last.1.is_empty() {
+                        last.1.push_str(", ");
+                    }
+                    last.1.push_str(item.trim());
+                }
+                continue;
+            }
+
+            let Some((key, value)) = Self::split_frontmatter_line(line) else {
+                // Continuation of a multi-line value.
+                if let Some(last) = entries.last_mut() {
+                    if !last.1.is_empty() {
+                        last.1.push(' ');
+                    }
+                    last.1.push_str(line);
+                }
+                continue;
+            };
+
+            let value = if BLOCK_SCALARS.contains(&value) {
+                ""
+            } else {
+                value
+            };
+            let depth = (raw.len() - raw.trim_start().len()) / 2;
+            path.truncate(depth.min(path.len()));
+            let full_key = if path.is_empty() {
+                key.to_string()
+            } else {
+                format!("{}.{}", path.join("."), key)
+            };
+            path.push(key.to_string());
+            entries.push((full_key, Self::unquote(value)));
+        }
+
+        // Drop the empty placeholder left by a nested key whose children
+        // were flattened to dotted entries; keep genuinely empty leaves.
+        let mut parents: Vec<String> = Vec::new();
+        for (key, value) in &entries {
+            if value.is_empty()
+                && entries.iter().any(|(k, _)| {
+                    k.len() > key.len()
+                        && k.starts_with(key.as_str())
+                        && k.as_bytes()[key.len()] == b'.'
+                })
+            {
+                parents.push(key.clone());
+            }
+        }
+        entries.retain(|(key, _)| !parents.contains(key));
+        entries
+    }
+
+    /// Split a frontmatter line at the first `": "` separator, or accept a
+    /// bare `"key:"` with an empty value. Returns `None` for lines that are
+    /// neither, so callers can treat them as value continuations.
+    fn split_frontmatter_line(line: &str) -> Option<(&str, &str)> {
+        if let Some(idx) = line.find(": ") {
+            let key = &line[..idx];
+            if !key.is_empty() && !key.contains(':') {
+                return Some((key, line[idx + 2..].trim()));
+            }
+            None
+        } else if let Some(key) = line.strip_suffix(':') {
+            (!key.is_empty()).then_some((key, ""))
+        } else {
+            None
+        }
+    }
+
+    /// Strip one layer of matching double or single quotes from a scalar.
+    fn unquote(value: &str) -> String {
+        if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+        {
+            value[1..value.len() - 1].to_string()
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn escape_html(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
+    /// GitHub-style rendering: a headerless two-column table, one row per
+    /// entry, keys on the left.
+    fn render_frontmatter_table(entries: &[(String, String)]) -> String {
+        let mut out = String::from("<table class=\"frontmatter\">\n<tbody>\n");
+        for (key, value) in entries {
+            out.push_str("<tr><td>");
+            out.push_str(&Self::escape_html(key));
+            out.push_str("</td><td>");
+            out.push_str(&Self::escape_html(value));
+            out.push_str("</td></tr>\n");
+        }
+        out.push_str("</tbody>\n</table>\n");
+        out
     }
 
     /// Process raw HTML content with D2 and LaTeX post-processing (no markdown
@@ -1510,6 +1680,82 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn test_frontmatter_rendered_as_table() {
+        let md = "---\ntitle: Hello\nauthor: \"Jane\"\n---\n\n# Heading\n\nBody.\n";
+        let html = MarkdownState::markdown_to_html(
+            md,
+            DiagramOpts {
+                frontmatter: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(html.contains("<table class=\"frontmatter\">"));
+        assert!(html.contains("<td>title</td><td>Hello</td>"));
+        assert!(html.contains("<td>author</td><td>Jane</td>"));
+        assert!(html.contains("<h1>Heading</h1>"));
+        assert!(!html.contains("<hr"));
+        assert!(!html.contains(": Hello"));
+        assert!(!html.contains("author: "));
+    }
+
+    #[test]
+    fn test_frontmatter_disabled_is_swallowed() {
+        let md = "---\ntitle: Hello\n---\n\n# Heading\n";
+        let html = MarkdownState::markdown_to_html(md, DiagramOpts::default()).unwrap();
+        assert!(!html.contains("frontmatter"));
+        assert!(!html.contains("Hello"));
+        assert!(html.contains("<h1>Heading</h1>"));
+    }
+
+    #[test]
+    fn test_frontmatter_nested_maps_and_lists() {
+        let md = "---\nconfig:\n  theme: dark\n  version: 1.0\ntags:\n  - a\n  - b\n---\n\nBody\n";
+        let html = MarkdownState::markdown_to_html(
+            md,
+            DiagramOpts {
+                frontmatter: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(html.contains("<td>config.theme</td><td>dark</td>"));
+        assert!(html.contains("<td>config.version</td><td>1.0</td>"));
+        assert!(html.contains("<td>tags</td><td>a, b</td>"));
+        assert!(!html.contains(">config<"));
+        assert!(!html.contains("theme: dark"));
+    }
+
+    #[test]
+    fn test_frontmatter_html_escaped() {
+        let md = "---\nscript: <b>&amp; \"quoted\"\n---\n\nBody\n";
+        let html = MarkdownState::markdown_to_html(
+            md,
+            DiagramOpts {
+                frontmatter: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(html.contains("&lt;b&gt;&amp;amp; &quot;quoted&quot;"));
+    }
+
+    #[test]
+    fn test_frontmatter_unterminated_left_alone() {
+        let md = "---\nno closing fence here\n\n# Heading\n";
+        let html = MarkdownState::markdown_to_html(
+            md,
+            DiagramOpts {
+                frontmatter: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!html.contains("closing fence</td>"));
+        assert!(html.contains("<hr"));
+    }
+
+    #[test]
     fn test_is_markdown_file() {
         assert!(is_markdown_file(Path::new("test.md")));
         assert!(is_markdown_file(Path::new("/path/to/file.md")));
@@ -1793,6 +2039,7 @@ mod tests {
                 latex: false,
                 typst: false,
                 gfm: false,
+                frontmatter: false,
             },
         )
     }
@@ -2247,6 +2494,7 @@ classDiagram
                 latex: false,
                 typst: false,
                 gfm: false,
+                frontmatter: false,
             },
         );
 
@@ -2383,6 +2631,7 @@ classDiagram
                 latex: true,
                 typst: false,
                 gfm: false,
+                frontmatter: false,
             },
         );
 
@@ -2411,6 +2660,7 @@ $$\n";
                 latex: true,
                 typst: false,
                 gfm: false,
+                frontmatter: false,
             },
         );
 
