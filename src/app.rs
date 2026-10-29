@@ -11,6 +11,11 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use ratex_layout::{layout, to_display_list, LayoutOptions};
+use ratex_parser::parse;
+use ratex_svg::{render_to_svg, SvgOptions};
+use ratex_types::color::Color;
+use ratex_types::math_style::MathStyle;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -28,11 +33,6 @@ use tokio::{
     sync::{broadcast, mpsc, Mutex},
 };
 use tower_http::cors::CorsLayer;
-use ratex_layout::{layout, to_display_list, LayoutOptions};
-use ratex_parser::parse;
-use ratex_svg::{render_to_svg, SvgOptions};
-use ratex_types::color::Color;
-use ratex_types::math_style::MathStyle;
 use tracing::{debug, error, info, trace, warn};
 
 const APP_HTML: &str = include_str!("../frontend/dist/index.html");
@@ -60,7 +60,6 @@ pub(crate) struct DiagramOpts {
 }
 
 type SharedMarkdownState = Arc<Mutex<MarkdownState>>;
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type")]
@@ -108,8 +107,7 @@ fn collect_markdown_recursive(
 
         if path.is_dir() {
             collect_markdown_recursive(&path, md_files, include_html, include_typst, include_pdf)?;
-        } else if path.is_file()
-            && is_tracked_file(&path, include_html, include_typst, include_pdf)
+        } else if path.is_file() && is_tracked_file(&path, include_html, include_typst, include_pdf)
         {
             md_files.push(path);
         }
@@ -138,9 +136,7 @@ fn is_markdown_file(path: &Path) -> bool {
 fn is_html_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
-        })
+        .map(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
         .unwrap_or(false)
 }
 
@@ -817,7 +813,11 @@ pub(crate) async fn serve_markdown(
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
 
     if actual_port != port {
-        warn!(requested = port, actual = actual_port, "requested port in use; using alternative");
+        warn!(
+            requested = port,
+            actual = actual_port,
+            "requested port in use; using alternative"
+        );
     }
 
     let listen_addr = format_host(hostname, actual_port);
@@ -828,7 +828,10 @@ pub(crate) async fn serve_markdown(
         info!(file = %file_path.display(), "serving markdown file");
     }
 
-    info!(url = format!("http://{listen_addr}"), "server listening; live reload enabled (Ctrl+C to stop)");
+    info!(
+        url = format!("http://{listen_addr}"),
+        "server listening; live reload enabled (Ctrl+C to stop)"
+    );
 
     if open {
         let browse_addr = format_host(&browsable_host(hostname), actual_port);
@@ -1029,9 +1032,7 @@ fn nav_insert(nodes: &mut Vec<NavNode>, parts: &[&str], full_key: &str) {
 /// collapsed sidebar circle buttons. Prefers uppercase initials (handles
 /// PascalCase / camelCase names), falls back to the first two characters.
 fn file_abbr(name: &str) -> String {
-    let stem = name
-        .trim_end_matches(".md")
-        .trim_end_matches(".markdown");
+    let stem = name.trim_end_matches(".md").trim_end_matches(".markdown");
     let caps: String = stem.chars().filter(|c| c.is_uppercase()).collect();
     match caps.len() {
         0 => stem.chars().take(2).collect(),
@@ -1093,11 +1094,7 @@ fn render_d2_blocks(html: &str) -> String {
 /// Render a single D2 source snippet to SVG via `d2 -` (stdin → stdout).
 fn render_one_d2(source: &str, index: u32) -> Result<String> {
     let mut child = Command::new("d2")
-        .args([
-            "--no-xml-tag",
-            &format!("--salt=mdrv{}", index),
-            "-",
-        ])
+        .args(["--no-xml-tag", &format!("--salt=mdrv{}", index), "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1110,9 +1107,7 @@ fn render_one_d2(source: &str, index: u32) -> Result<String> {
     // Drop stdin to signal EOF.
     child.stdin.take();
 
-    let output = child
-        .wait_with_output()
-        .context("failed to wait on `d2`")?;
+    let output = child.wait_with_output().context("failed to wait on `d2`")?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -1180,7 +1175,15 @@ fn typst_html_available() -> bool {
     static AVAIL: OnceLock<bool> = OnceLock::new();
     *AVAIL.get_or_init(|| {
         let Ok(mut child) = Command::new("typst")
-            .args(["compile", "-", "-", "--format", "html", "--features", "html"])
+            .args([
+                "compile",
+                "-",
+                "-",
+                "--format",
+                "html",
+                "--features",
+                "html",
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -1193,10 +1196,7 @@ fn typst_html_available() -> bool {
         }
         child
             .wait_with_output()
-            .map(|o| {
-                o.status.success()
-                    && String::from_utf8_lossy(&o.stdout).contains("<body")
-            })
+            .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("<body"))
             .unwrap_or(false)
     })
 }
@@ -1370,7 +1370,13 @@ fn render_typst_document_freeflow(content: &str) -> Result<String> {
 
     let mut child = Command::new("typst")
         .args([
-            "compile", "-", "-", "--format", "html", "--features", "html",
+            "compile",
+            "-",
+            "-",
+            "--format",
+            "html",
+            "--features",
+            "html",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1426,7 +1432,9 @@ fn render_gfm_alerts(html: &str) -> String {
     let Ok(block_re) = Regex::new(r"(?s)<blockquote>(.*?)</blockquote>") else {
         return html.to_string();
     };
-    let Ok(alert_re) = Regex::new(r"(?s)^\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*?)</p>(.*)$") else {
+    let Ok(alert_re) =
+        Regex::new(r"(?s)^\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*?)</p>(.*)$")
+    else {
         return html.to_string();
     };
 
@@ -1434,7 +1442,10 @@ fn render_gfm_alerts(html: &str) -> String {
         .replace_all(html, |caps: &regex::Captures| {
             let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let Some(a) = alert_re.captures(inner) else {
-                return caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+                return caps
+                    .get(0)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
             };
             let typ = a.get(1).map(|m| m.as_str()).unwrap_or("NOTE");
             let first_rest = a.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -1471,10 +1482,9 @@ fn render_gfm_alerts(html: &str) -> String {
 /// left untouched so the source remains visible.
 fn render_latex_blocks(html: &str) -> String {
     // Display math: <pre><code class="language-math math-display">CONTENT</code></pre>
-    let display_re = Regex::new(
-        r#"(?s)<pre><code class="language-math math-display">(.*?)</code></pre>"#,
-    )
-    .expect("static regex");
+    let display_re =
+        Regex::new(r#"(?s)<pre><code class="language-math math-display">(.*?)</code></pre>"#)
+            .expect("static regex");
     let mut result = display_re
         .replace_all(html, |caps: &regex::Captures| {
             let source = unescape_html(&caps[1]);
@@ -1486,10 +1496,8 @@ fn render_latex_blocks(html: &str) -> String {
         .into_owned();
 
     // Inline math: <code class="language-math math-inline">CONTENT</code>
-    let inline_re = Regex::new(
-        r#"(?s)<code class="language-math math-inline">(.*?)</code>"#,
-    )
-    .expect("static regex");
+    let inline_re = Regex::new(r#"(?s)<code class="language-math math-inline">(.*?)</code>"#)
+        .expect("static regex");
     result = inline_re
         .replace_all(&result, |caps: &regex::Captures| {
             let source = unescape_html(&caps[1]);
@@ -1561,7 +1569,8 @@ fn render_one_latex(source: &str, inline: bool) -> Result<String> {
 }
 
 fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
-    let viewbox_re = regex::Regex::new(r#"viewBox="[\d.\-]+ [\d.\-]+ [\d.\-]+ ([\d.\-]+)""#).unwrap();
+    let viewbox_re =
+        regex::Regex::new(r#"viewBox="[\d.\-]+ [\d.\-]+ [\d.\-]+ ([\d.\-]+)""#).unwrap();
     let svg_tag_end = svg.find('>').unwrap_or(svg.len());
     let (head, rest) = svg.split_at(svg_tag_end);
     let dim_re = regex::Regex::new(r#"\s(?:width|height)=\"[^\"]*\""#).unwrap();
@@ -1571,7 +1580,13 @@ fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
         Some(caps) => {
             let vh: f64 = caps[1].parse().unwrap_or(font_size);
             let em = vh / font_size;
-            stripped.replacen("<svg", &format!("<svg style=\"height:{em}em;width:auto\""), 1).to_string()
+            stripped
+                .replacen(
+                    "<svg",
+                    &format!("<svg style=\"height:{em}em;width:auto\""),
+                    1,
+                )
+                .to_string()
         }
         None => stripped.to_string(),
     }
@@ -1989,7 +2004,8 @@ mod tests {
     fn test_scan_markdown_files_empty_directory() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+            .expect("Failed to scan");
         assert_eq!(result.len(), 0);
     }
 
@@ -2004,7 +2020,8 @@ mod tests {
         fs::write(temp_dir.path().join("test.txt"), "text").expect("Failed to write");
         fs::write(temp_dir.path().join("README"), "readme").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+            .expect("Failed to scan");
 
         assert_eq!(result.len(), 3);
 
@@ -2025,7 +2042,8 @@ mod tests {
         fs::create_dir(&sub_dir).expect("Failed to create subdir");
         fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+            .expect("Failed to scan");
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_name().unwrap().to_str().unwrap(), "root.md");
@@ -2040,7 +2058,8 @@ mod tests {
         fs::write(temp_dir.path().join("test3.Md"), "# Test 3").expect("Failed to write");
         fs::write(temp_dir.path().join("test4.MARKDOWN"), "# Test 4").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+            .expect("Failed to scan");
 
         assert_eq!(result.len(), 4);
     }
@@ -2060,11 +2079,13 @@ mod tests {
         fs::write(nested_dir.join("deeper.md"), "# Deeper").expect("Failed to write");
 
         // Non-recursive still ignores nested files
-        let flat = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
+        let flat = scan_markdown_files(temp_dir.path(), false, false, false, false)
+            .expect("Failed to scan");
         assert_eq!(flat.len(), 1);
 
         // Recursive picks up nested files
-        let result = scan_markdown_files(temp_dir.path(), true, false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), true, false, false, false)
+            .expect("Failed to scan");
         assert_eq!(result.len(), 3);
     }
 
@@ -2185,9 +2206,7 @@ mod tests {
         .expect("Failed to create router");
 
         let server = if use_http {
-            TestServer::builder()
-                .http_transport()
-                .build(router)
+            TestServer::builder().http_transport().build(router)
         } else {
             TestServer::new(router)
         };
@@ -2229,8 +2248,8 @@ mod tests {
             .expect("Failed to write test3.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files =
-            scan_markdown_files(&base_dir, false, false, false, false).expect("Failed to scan markdown files");
+        let tracked_files = scan_markdown_files(&base_dir, false, false, false, false)
+            .expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -2246,9 +2265,7 @@ mod tests {
         .expect("Failed to create router");
 
         let server = if use_http {
-            TestServer::builder()
-                .http_transport()
-                .build(router)
+            TestServer::builder().http_transport().build(router)
         } else {
             TestServer::new(router)
         };
@@ -2276,7 +2293,8 @@ mod tests {
             .expect("Failed to write guide/intro.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, true, false, false, false).expect("Failed to scan");
+        let tracked_files =
+            scan_markdown_files(&base_dir, true, false, false, false).expect("Failed to scan");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -2629,7 +2647,10 @@ classDiagram
         let md = "> [!NOTE]\n> This is a note.\n";
         let html = MarkdownState::markdown_to_html(
             md,
-            DiagramOpts { gfm: true, ..Default::default() },
+            DiagramOpts {
+                gfm: true,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert!(
@@ -2648,7 +2669,10 @@ classDiagram
         let md = "> Just a regular quote.\n";
         let html = MarkdownState::markdown_to_html(
             md,
-            DiagramOpts { gfm: true, ..Default::default() },
+            DiagramOpts {
+                gfm: true,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert!(html.contains("<blockquote>"));
@@ -2713,12 +2737,11 @@ classDiagram
         // absent). Both outcomes are acceptable.
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let typ_content = "#set page(width: 200pt)\nHello from Typst.\n";
-        fs::write(temp_dir.path().join("doc.typ"), typ_content)
-            .expect("Failed to write doc.typ");
+        fs::write(temp_dir.path().join("doc.typ"), typ_content).expect("Failed to write doc.typ");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, false, false, true, false)
-            .expect("Failed to scan");
+        let tracked_files =
+            scan_markdown_files(&base_dir, false, false, true, false).expect("Failed to scan");
         assert_eq!(
             tracked_files.len(),
             1,
@@ -2768,8 +2791,8 @@ classDiagram
         fs::write(temp_dir.path().join("doc.typ"), "Hello Typst.\n")
             .expect("Failed to write doc.typ");
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, false, false, true, false)
-            .expect("Failed to scan");
+        let tracked_files =
+            scan_markdown_files(&base_dir, false, false, true, false).expect("Failed to scan");
         let router = new_router(
             base_dir,
             tracked_files,
@@ -2892,8 +2915,17 @@ $$\n";
             .to_path_buf();
         let tracked_files = vec![canonical_path];
 
-        let router = new_router(base_dir, tracked_files, false, false, opts, true, false, false)
-            .expect("Failed to create router");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            false,
+            false,
+            opts,
+            true,
+            false,
+            false,
+        )
+        .expect("Failed to create router");
         let server = TestServer::new(router);
         (server, temp_file)
     }
@@ -2914,7 +2946,10 @@ $$\n";
     #[tokio::test]
     async fn test_html_file_latex_vjudge_inline() {
         let html = "<p>Width <span class='math math-inline'>$ n \\times n $</span></p>";
-        let opts = DiagramOpts { latex: true, ..Default::default() };
+        let opts = DiagramOpts {
+            latex: true,
+            ..Default::default()
+        };
         let (server, _temp) = create_html_test_server(html, opts);
         let body = server.get("/").await.text();
         let content = extract_content(&body);
@@ -2932,7 +2967,10 @@ $$\n";
     async fn test_html_file_latex_multiline_class() {
         // VJudge sometimes splits the class attribute across multiple lines
         let html = "<span class='\n  math\n  math-inline\n'>$ x $</span>";
-        let opts = DiagramOpts { latex: true, ..Default::default() };
+        let opts = DiagramOpts {
+            latex: true,
+            ..Default::default()
+        };
         let (server, _temp) = create_html_test_server(html, opts);
         let body = server.get("/").await.text();
         let content = extract_content(&body);
@@ -2941,7 +2979,6 @@ $$\n";
             "multi-line class math should render: {content}"
         );
     }
-
 
     #[tokio::test]
     async fn test_mermaid_js_etag_caching() {
@@ -3065,7 +3102,10 @@ $$\n";
         let body2 = response2.text();
         let nav2 = extract_nav_json(&body2);
 
-        assert!(nav2.contains("test2.markdown"), "test2.markdown should be in nav");
+        assert!(
+            nav2.contains("test2.markdown"),
+            "test2.markdown should be in nav"
+        );
     }
 
     #[tokio::test]
@@ -3130,7 +3170,10 @@ $$\n";
         );
         assert!(nav.contains("guide"), "nav should contain guide dir");
         assert!(nav.contains("intro.md"), "nav should contain intro.md");
-        assert!(nav.contains("guide/intro.md"), "nav should have guide/intro.md path");
+        assert!(
+            nav.contains("guide/intro.md"),
+            "nav should have guide/intro.md path"
+        );
         assert!(nav.contains("index.md"), "nav should have index.md path");
     }
 
@@ -3143,7 +3186,10 @@ $$\n";
         let body = response.text();
         let nav = extract_nav_json(&body);
 
-        assert!(nav.contains("guide/intro.md"), "guide/intro.md should be in nav");
+        assert!(
+            nav.contains("guide/intro.md"),
+            "guide/intro.md should be in nav"
+        );
     }
 
     #[tokio::test]
