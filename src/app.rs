@@ -678,6 +678,7 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_router(
     base_dir: PathBuf,
     tracked_files: Vec<PathBuf>,
@@ -760,6 +761,7 @@ async fn bind_with_retry(hostname: &str, port: u16) -> Result<(TcpListener, u16)
         )))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn serve_markdown(
     base_dir: PathBuf,
     tracked_files: Vec<PathBuf>,
@@ -1065,9 +1067,9 @@ fn render_d2_blocks(html: &str) -> String {
 
     let mut result = String::with_capacity(html.len());
     let mut last_end = 0;
-    let mut index = 0u32;
 
-    for caps in re.captures_iter(html) {
+    for (index, caps) in re.captures_iter(html).enumerate() {
+        let index = index as u32;
         let m = caps.get(0).unwrap();
         result.push_str(&html[last_end..m.start()]);
 
@@ -1085,7 +1087,6 @@ fn render_d2_blocks(html: &str) -> String {
         }
 
         last_end = m.end();
-        index += 1;
     }
     result.push_str(&html[last_end..]);
     result
@@ -3603,7 +3604,7 @@ $$\n";
             "raw pdf must be inline, not attachment: {disposition}"
         );
         assert!(!response.header("etag").to_str().unwrap().is_empty());
-        assert_eq!(response.as_bytes(), &TEST_PDF_BYTES[..]);
+        assert_eq!(response.as_bytes(), TEST_PDF_BYTES);
     }
 
     #[tokio::test]
