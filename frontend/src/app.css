@@ -247,6 +247,15 @@ body {
 
 /* PDF viewer pages: the iframe fills the content area and hosts the
    browser's built-in PDF viewer. */
+/* PDF pages: #content is a flex item in .has-nav, and an iframe has no
+   intrinsic width, so the flex item shrinks to the iframe's 300px
+   default. Claim the remaining width instead. */
+#content:has(> .pdf-frame) {
+	flex: 1 1 auto;
+	max-width: none;
+	margin-right: 20px;
+}
+
 .pdf-frame {
 	display: block;
 	width: 100%;
