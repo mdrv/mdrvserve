@@ -28,7 +28,8 @@ is not a long-running server and doesn't need to be.
 **Agent-friendly content.** GFM (tables, task lists, code blocks, alert callouts), YAML
 frontmatter rendered as a key/value table (`--with-frontmatter`), opt-in
 D2 / Mermaid / LaTeX math / Typst support, HTML file serving (`--include-html`),
-Typst file serving (`--include-typst`), and directory mode with a navigation sidebar — including `--recursive`
+Typst file serving (`--include-typst`), PDF listing (`--include-pdf`), and directory
+mode with a navigation sidebar — including `--recursive`
 support for nested subdirectories shown as collapsible groups. Sidebar
 filter with wildcard patterns, source view, and scroll persistence round
 out the reading experience.

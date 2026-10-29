@@ -263,6 +263,7 @@
 		isTypst={data.isTypst}
 		lastModified={data.lastModified}
 		freeflowAvailable={freeflowAvailable}
+		sourceAvailable={data.sourceContent.trim() !== ''}
 		{theme}
 		onopentheme={() => (showThemeModal = true)}
 		onopensource={() => (showSourceModal = true)}

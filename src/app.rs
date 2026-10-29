@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path as AxumPath, State, WebSocketUpgrade,
+        Path as AxumPath, RawQuery, State, WebSocketUpgrade,
     },
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse},
     routing::get,
     Router,
@@ -73,17 +73,18 @@ pub(crate) fn scan_markdown_files(
     recursive: bool,
     include_html: bool,
     include_typst: bool,
+    include_pdf: bool,
 ) -> Result<Vec<PathBuf>> {
     let mut md_files = Vec::new();
 
     if recursive {
-        collect_markdown_recursive(dir, &mut md_files, include_html, include_typst)?;
+        collect_markdown_recursive(dir, &mut md_files, include_html, include_typst, include_pdf)?;
     } else {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && is_tracked_file(&path, include_html, include_typst) {
+            if path.is_file() && is_tracked_file(&path, include_html, include_typst, include_pdf) {
                 md_files.push(path);
             }
         }
@@ -99,14 +100,17 @@ fn collect_markdown_recursive(
     md_files: &mut Vec<PathBuf>,
     include_html: bool,
     include_typst: bool,
+    include_pdf: bool,
 ) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_dir() {
-            collect_markdown_recursive(&path, md_files, include_html, include_typst)?;
-        } else if path.is_file() && is_tracked_file(&path, include_html, include_typst) {
+            collect_markdown_recursive(&path, md_files, include_html, include_typst, include_pdf)?;
+        } else if path.is_file()
+            && is_tracked_file(&path, include_html, include_typst, include_pdf)
+        {
             md_files.push(path);
         }
     }
@@ -140,13 +144,27 @@ fn is_html_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn is_pdf_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false)
+}
+
 /// Returns true if the file should be tracked. Markdown files are always
 /// tracked; HTML files are tracked when `include_html` is set; Typst files
-/// are tracked when `include_typst` is set.
-fn is_tracked_file(path: &Path, include_html: bool, include_typst: bool) -> bool {
+/// are tracked when `include_typst` is set; PDF files are tracked when
+/// `include_pdf` is set.
+fn is_tracked_file(
+    path: &Path,
+    include_html: bool,
+    include_typst: bool,
+    include_pdf: bool,
+) -> bool {
     is_markdown_file(path)
         || (include_html && is_html_file(path))
         || (include_typst && is_typst_file(path))
+        || (include_pdf && is_pdf_file(path))
 }
 
 fn is_typst_file(path: &Path) -> bool {
@@ -176,6 +194,7 @@ struct MarkdownState {
     frontmatter_enabled: bool,
     include_html: bool,
     include_typst: bool,
+    include_pdf: bool,
     change_tx: broadcast::Sender<ServerMessage>,
 }
 
@@ -187,6 +206,7 @@ impl MarkdownState {
         opts: DiagramOpts,
         include_html: bool,
         include_typst: bool,
+        include_pdf: bool,
     ) -> Result<Self> {
         let (change_tx, _) = broadcast::channel::<ServerMessage>(16);
 
@@ -194,7 +214,13 @@ impl MarkdownState {
         for file_path in file_paths {
             let metadata = fs::metadata(&file_path)?;
             let last_modified = metadata.modified()?;
-            let content = fs::read_to_string(&file_path)?;
+            // PDFs are binary: track metadata only; bytes are re-read from
+            // disk on each raw request.
+            let content = if is_pdf_file(&file_path) {
+                String::new()
+            } else {
+                fs::read_to_string(&file_path)?
+            };
             let key = relative_key(&file_path, &base_dir);
             tracked_files.insert(
                 key,
@@ -220,6 +246,7 @@ impl MarkdownState {
             frontmatter_enabled: opts.frontmatter,
             include_html,
             include_typst,
+            include_pdf,
             change_tx,
         })
     }
@@ -236,8 +263,12 @@ impl MarkdownState {
 
     fn refresh_file(&mut self, filename: &str) -> Result<()> {
         if let Some(tracked) = self.tracked_files.get_mut(filename) {
-            let content = fs::read_to_string(&tracked.path)?;
-            tracked.source = content;
+            // PDFs are binary; only the mtime matters here (bytes are
+            // re-read from disk on each raw request).
+            if !is_pdf_file(&tracked.path) {
+                let content = fs::read_to_string(&tracked.path)?;
+                tracked.source = content;
+            }
             tracked.html = None;
             tracked.html_freeflow = None;
             tracked.last_modified = fs::metadata(&tracked.path)?.modified()?;
@@ -254,7 +285,11 @@ impl MarkdownState {
         }
 
         let metadata = fs::metadata(&file_path)?;
-        let content = fs::read_to_string(&file_path)?;
+        let content = if is_pdf_file(&file_path) {
+            String::new()
+        } else {
+            fs::read_to_string(&file_path)?
+        };
         info!(file = %key, "tracking new file");
         self.tracked_files.insert(
             key,
@@ -272,14 +307,18 @@ impl MarkdownState {
 
     /// Render a file's source into (html, html_freeflow). Markdown and HTML
     /// are infallible; Typst compilation falls back to a source listing on
-    /// any error so one bad file never breaks serving.
+    /// any error so one bad file never breaks serving. PDFs are never read
+    /// as source — they render to a wrapper iframe over the raw bytes.
     fn render_file_content(
         content: &str,
         path: &Path,
+        filename: &str,
         opts: DiagramOpts,
     ) -> (String, Option<String>) {
         let is_typst = is_typst_file(path);
-        let html = if is_typst {
+        let html = if is_pdf_file(path) {
+            render_pdf_wrapper(filename)
+        } else if is_typst {
             render_typst_document(content).unwrap_or_default()
         } else if is_html_file(path) {
             Self::render_html_content(content, opts).unwrap_or_else(|_| content.to_string())
@@ -307,7 +346,7 @@ impl MarkdownState {
             return;
         }
         let (html, html_freeflow) =
-            Self::render_file_content(&tracked.source, &tracked.path, opts);
+            Self::render_file_content(&tracked.source, &tracked.path, filename, opts);
         tracked.html = Some(html);
         tracked.html_freeflow = html_freeflow;
         debug!(file = filename, "rendered file");
@@ -548,7 +587,12 @@ impl MarkdownState {
 
 async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
     let mut state_guard = state.lock().await;
-    if !is_tracked_file(path, state_guard.include_html, state_guard.include_typst) {
+    if !is_tracked_file(
+        path,
+        state_guard.include_html,
+        state_guard.include_typst,
+        state_guard.include_pdf,
+    ) {
         return;
     }
 
@@ -604,7 +648,11 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
         }
         _ => {
             for path in &event.paths {
-                if is_markdown_file(path) || is_html_file(path) || is_typst_file(path) {
+                if is_markdown_file(path)
+                    || is_html_file(path)
+                    || is_typst_file(path)
+                    || is_pdf_file(path)
+                {
                     match event.kind {
                         notify::EventKind::Create(_)
                         | notify::EventKind::Modify(notify::event::ModifyKind::Data(_)) => {
@@ -642,6 +690,7 @@ fn new_router(
     opts: DiagramOpts,
     include_html: bool,
     include_typst: bool,
+    include_pdf: bool,
 ) -> Result<Router> {
     let base_dir = base_dir.canonicalize()?;
 
@@ -652,6 +701,7 @@ fn new_router(
         opts,
         include_html,
         include_typst,
+        include_pdf,
     )?));
 
     let watcher_state = state.clone();
@@ -725,6 +775,7 @@ pub(crate) async fn serve_markdown(
     opts: DiagramOpts,
     include_html: bool,
     include_typst: bool,
+    include_pdf: bool,
 ) -> Result<()> {
     let hostname = hostname.as_ref();
 
@@ -760,6 +811,7 @@ pub(crate) async fn serve_markdown(
         opts,
         include_html,
         include_typst,
+        include_pdf,
     )?;
 
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
@@ -871,9 +923,18 @@ async fn serve_html_root(State(state): State<SharedMarkdownState>) -> impl IntoR
 
 async fn serve_file(
     AxumPath(filename): AxumPath<String>,
+    RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
     State(state): State<SharedMarkdownState>,
 ) -> axum::response::Response {
     debug!(file = %filename, "serving request");
+    // `?raw` selects the raw bytes of a binary file (currently PDF);
+    // without it a PDF is served wrapped in the standard page shell.
+    let wants_raw = raw_query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .any(|pair| pair.split('=').next() == Some("raw"));
     if filename.ends_with(".md")
         || filename.ends_with(".markdown")
         || filename.ends_with(".html")
@@ -889,6 +950,20 @@ async fn serve_file(
         state.ensure_rendered(&filename);
         let (status, html) = render_markdown(&state, &filename).await;
         (status, html).into_response()
+    } else if filename.ends_with(".pdf") {
+        let mut state = state.lock().await;
+
+        if !state.tracked_files.contains_key(&filename) {
+            return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+        }
+
+        if wants_raw {
+            serve_pdf_raw(&state, &filename, &headers).await
+        } else {
+            state.ensure_rendered(&filename);
+            let (status, html) = render_markdown(&state, &filename).await;
+            (status, html).into_response()
+        }
     } else if is_image_file(&filename) {
         serve_static_file_inner(filename, state).await
     } else {
@@ -1065,6 +1140,26 @@ fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// Escape for safe use inside a double-quoted HTML attribute.
+fn escape_attr(s: &str) -> String {
+    escape_html(s).replace('"', "&quot;")
+}
+
+/// Body of the wrapper page for a tracked PDF: an iframe over the raw
+/// bytes. The shell around it (sidebar, WebSocket reload, themes) is the
+/// standard one, so a rebuilt PDF refreshes live like any other page.
+fn render_pdf_wrapper(filename: &str) -> String {
+    let name = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename);
+    format!(
+        "<iframe class=\"pdf-frame\" src=\"{}?raw=1\" title=\"{}\"></iframe>",
+        escape_attr(filename),
+        escape_attr(name)
+    )
 }
 
 /// Whether the `typst` binary is available on PATH. Cached for the process.
@@ -1609,6 +1704,76 @@ async fn serve_static_file_inner(
     }
 }
 
+/// Serve the raw bytes of a tracked PDF (`file.pdf?raw=1`) for the
+/// wrapper iframe's native viewer. Read from disk per request — PDFs are
+/// binary and potentially large — with an mtime-based ETag so the browser
+/// can revalidate instead of re-downloading.
+async fn serve_pdf_raw(
+    state: &MarkdownState,
+    filename: &str,
+    headers: &HeaderMap,
+) -> axum::response::Response {
+    let full_path = state.base_dir.join(filename);
+    let Ok(canonical_path) = full_path.canonicalize() else {
+        return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+    };
+    if !canonical_path.starts_with(&state.base_dir) {
+        return (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "text/plain")],
+            "Access denied".to_string(),
+        )
+            .into_response();
+    }
+    let (Ok(bytes), Ok(modified)) = (
+        fs::read(&canonical_path),
+        fs::metadata(&canonical_path).and_then(|m| m.modified()),
+    ) else {
+        return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+    };
+
+    let etag = pdf_etag(modified, bytes.len());
+    if let Some(given) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
+        if given.split(',').any(|tag| tag.trim() == etag) {
+            return StatusCode::NOT_MODIFIED.into_response();
+        }
+    }
+
+    let name = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document.pdf")
+        .replace('"', "");
+    let disposition = format!("inline; filename=\"{name}\"");
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/pdf"),
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("inline")),
+    );
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response_headers.insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("pdf etag is a valid header value"),
+    );
+    response
+}
+
+fn pdf_etag(modified: SystemTime, len: usize) -> String {
+    let secs = modified
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("\"{secs:x}-{len:x}\"")
+}
+
 fn is_image_file(file_path: &str) -> bool {
     guess_image_content_type(file_path).starts_with("image/")
 }
@@ -1824,7 +1989,7 @@ mod tests {
     fn test_scan_markdown_files_empty_directory() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
         assert_eq!(result.len(), 0);
     }
 
@@ -1839,7 +2004,7 @@ mod tests {
         fs::write(temp_dir.path().join("test.txt"), "text").expect("Failed to write");
         fs::write(temp_dir.path().join("README"), "readme").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 3);
 
@@ -1860,7 +2025,7 @@ mod tests {
         fs::create_dir(&sub_dir).expect("Failed to create subdir");
         fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_name().unwrap().to_str().unwrap(), "root.md");
@@ -1875,7 +2040,7 @@ mod tests {
         fs::write(temp_dir.path().join("test3.Md"), "# Test 3").expect("Failed to write");
         fs::write(temp_dir.path().join("test4.MARKDOWN"), "# Test 4").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
 
         assert_eq!(result.len(), 4);
     }
@@ -1895,11 +2060,11 @@ mod tests {
         fs::write(nested_dir.join("deeper.md"), "# Deeper").expect("Failed to write");
 
         // Non-recursive still ignores nested files
-        let flat = scan_markdown_files(temp_dir.path(), false, false, false).expect("Failed to scan");
+        let flat = scan_markdown_files(temp_dir.path(), false, false, false, false).expect("Failed to scan");
         assert_eq!(flat.len(), 1);
 
         // Recursive picks up nested files
-        let result = scan_markdown_files(temp_dir.path(), true, false, false).expect("Failed to scan");
+        let result = scan_markdown_files(temp_dir.path(), true, false, false, false).expect("Failed to scan");
         assert_eq!(result.len(), 3);
     }
 
@@ -2007,8 +2172,17 @@ mod tests {
         let tracked_files = vec![canonical_path];
         let is_directory_mode = false;
 
-        let router = new_router(base_dir, tracked_files, is_directory_mode, false, opts, false, false)
-            .expect("Failed to create router");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            is_directory_mode,
+            false,
+            opts,
+            false,
+            false,
+            false,
+        )
+        .expect("Failed to create router");
 
         let server = if use_http {
             TestServer::builder()
@@ -2056,7 +2230,7 @@ mod tests {
 
         let base_dir = temp_dir.path().to_path_buf();
         let tracked_files =
-            scan_markdown_files(&base_dir, false, false, false).expect("Failed to scan markdown files");
+            scan_markdown_files(&base_dir, false, false, false, false).expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -2065,6 +2239,7 @@ mod tests {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
             false,
             false,
         )
@@ -2101,7 +2276,7 @@ mod tests {
             .expect("Failed to write guide/intro.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, true, false, false).expect("Failed to scan");
+        let tracked_files = scan_markdown_files(&base_dir, true, false, false, false).expect("Failed to scan");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -2110,6 +2285,7 @@ mod tests {
             is_directory_mode,
             true,
             DiagramOpts::default(),
+            false,
             false,
             false,
         )
@@ -2239,6 +2415,7 @@ fn main() {
             DiagramOpts::default(),
             false,
             false,
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -2275,6 +2452,7 @@ fn main() {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
             false,
             false,
         )
@@ -2539,7 +2717,7 @@ classDiagram
             .expect("Failed to write doc.typ");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, false, false, true)
+        let tracked_files = scan_markdown_files(&base_dir, false, false, true, false)
             .expect("Failed to scan");
         assert_eq!(
             tracked_files.len(),
@@ -2555,6 +2733,7 @@ classDiagram
             DiagramOpts::default(),
             false,
             true,
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -2589,7 +2768,7 @@ classDiagram
         fs::write(temp_dir.path().join("doc.typ"), "Hello Typst.\n")
             .expect("Failed to write doc.typ");
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, false, false, true)
+        let tracked_files = scan_markdown_files(&base_dir, false, false, true, false)
             .expect("Failed to scan");
         let router = new_router(
             base_dir,
@@ -2599,6 +2778,7 @@ classDiagram
             DiagramOpts::default(),
             false,
             true,
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -2712,7 +2892,7 @@ $$\n";
             .to_path_buf();
         let tracked_files = vec![canonical_path];
 
-        let router = new_router(base_dir, tracked_files, false, false, opts, true, false)
+        let router = new_router(base_dir, tracked_files, false, false, opts, true, false, false)
             .expect("Failed to create router");
         let server = TestServer::new(router);
         (server, temp_file)
@@ -3272,5 +3452,189 @@ $$\n";
             !final_body.contains("Content of test1"),
             "Should not serve old content"
         );
+    }
+
+    const TEST_PDF_BYTES: &[u8] = b"%PDF-1.4\n% test pdf\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+
+    fn create_pdf_directory_server(include_pdf: bool, use_http: bool) -> (TestServer, TempDir) {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+
+        fs::write(temp_dir.path().join("test1.md"), TEST_FILE_1_CONTENT)
+            .expect("Failed to write test1.md");
+        fs::write(temp_dir.path().join("doc.pdf"), TEST_PDF_BYTES)
+            .expect("Failed to write doc.pdf");
+
+        let base_dir = temp_dir.path().to_path_buf();
+        let tracked_files = scan_markdown_files(&base_dir, false, false, false, include_pdf)
+            .expect("Failed to scan markdown files");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            true,
+            false,
+            DiagramOpts::default(),
+            false,
+            false,
+            include_pdf,
+        )
+        .expect("Failed to create router");
+
+        let server = if use_http {
+            TestServer::builder().http_transport().build(router)
+        } else {
+            TestServer::new(router)
+        };
+
+        (server, temp_dir)
+    }
+
+    #[test]
+    fn test_is_pdf_file_detection() {
+        assert!(is_pdf_file(Path::new("doc.pdf")));
+        assert!(is_pdf_file(Path::new("doc.PDF")));
+        assert!(is_pdf_file(Path::new("a/b/report.pdf")));
+        assert!(!is_pdf_file(Path::new("doc.md")));
+        assert!(!is_pdf_file(Path::new("doc.pdfx")));
+        assert!(!is_pdf_file(Path::new("doc")));
+    }
+
+    #[test]
+    fn test_pdf_scan_respects_flag() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        fs::write(temp_dir.path().join("test1.md"), TEST_FILE_1_CONTENT)
+            .expect("Failed to write test1.md");
+        fs::write(temp_dir.path().join("doc.pdf"), TEST_PDF_BYTES)
+            .expect("Failed to write doc.pdf");
+
+        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, false)
+            .expect("Failed to scan");
+        assert_eq!(
+            tracked.len(),
+            1,
+            "pdf must not be tracked without --include-pdf"
+        );
+
+        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, true)
+            .expect("Failed to scan");
+        assert_eq!(tracked.len(), 2, "pdf should be tracked with --include-pdf");
+    }
+
+    #[tokio::test]
+    async fn test_pdf_served_as_wrapper_page() {
+        let (server, _temp_dir) = create_pdf_directory_server(true, false);
+
+        let response = server.get("/doc.pdf").await;
+        assert_eq!(response.status_code(), 200);
+        let content = extract_content(&response.text());
+        assert!(
+            content.contains(r#"<iframe class="pdf-frame" src="doc.pdf?raw=1""#),
+            "wrapper should embed the raw pdf via iframe, got: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pdf_listed_in_nav() {
+        let (server, _temp_dir) = create_pdf_directory_server(true, false);
+
+        let nav = extract_nav_json(&server.get("/").await.text());
+        assert!(
+            nav.contains("doc.pdf"),
+            "sidebar should list doc.pdf: {nav}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pdf_raw_bytes_served_inline() {
+        let (server, _temp_dir) = create_pdf_directory_server(true, false);
+
+        let response = server.get("/doc.pdf").add_query_param("raw", "1").await;
+        assert_eq!(response.status_code(), 200);
+        assert_eq!(response.header("content-type"), "application/pdf");
+        let disposition_value = response.header("content-disposition");
+        let disposition = disposition_value.to_str().unwrap();
+        assert!(
+            disposition.starts_with("inline"),
+            "raw pdf must be inline, not attachment: {disposition}"
+        );
+        assert!(!response.header("etag").to_str().unwrap().is_empty());
+        assert_eq!(response.as_bytes(), &TEST_PDF_BYTES[..]);
+    }
+
+    #[tokio::test]
+    async fn test_pdf_raw_conditional_request_not_modified() {
+        let (server, _temp_dir) = create_pdf_directory_server(true, false);
+
+        let first = server.get("/doc.pdf").add_query_param("raw", "1").await;
+        let etag = first.header("etag");
+
+        let second = server
+            .get("/doc.pdf")
+            .add_query_param("raw", "1")
+            .add_header("if-none-match", etag.to_str().unwrap())
+            .await;
+        assert_eq!(second.status_code(), 304);
+    }
+
+    #[tokio::test]
+    async fn test_pdf_not_tracked_returns_404() {
+        let (server, _temp_dir) = create_pdf_directory_server(false, false);
+
+        let response = server.get("/doc.pdf").await;
+        assert_eq!(response.status_code(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_pdf_modification_triggers_reload() {
+        let (server, temp_dir) = create_pdf_directory_server(true, true);
+
+        let mut websocket = server.get_websocket("/ws").await.into_websocket().await;
+
+        fs::write(temp_dir.path().join("doc.pdf"), b"%PDF-1.4 updated")
+            .expect("Failed to modify doc.pdf");
+
+        tokio::time::sleep(Duration::from_millis(FILE_WATCH_DELAY_MS)).await;
+
+        let update_result = tokio::time::timeout(
+            Duration::from_secs(WEBSOCKET_TIMEOUT_SECS),
+            websocket.receive_json::<ServerMessage>(),
+        )
+        .await;
+
+        update_result.expect("Timeout waiting for WebSocket update after pdf modification");
+    }
+
+    #[tokio::test]
+    async fn test_single_file_pdf_mode() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let pdf_path = temp_dir.path().join("paper.pdf");
+        fs::write(&pdf_path, TEST_PDF_BYTES).expect("Failed to write paper.pdf");
+        let canonical_path = pdf_path.canonicalize().expect("canonicalize failed");
+        let base_dir = canonical_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
+
+        let router = new_router(
+            base_dir,
+            vec![canonical_path],
+            false,
+            false,
+            DiagramOpts::default(),
+            false,
+            false,
+            true,
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
+
+        // Root serves the single tracked file; the wrapper embeds the raw pdf.
+        let response = server.get("/").await;
+        assert_eq!(response.status_code(), 200);
+        let content = extract_content(&response.text());
+        assert!(content.contains(r#"src="paper.pdf?raw=1""#));
+
+        let raw = server.get("/paper.pdf").add_query_param("raw", "1").await;
+        assert_eq!(raw.status_code(), 200);
+        assert_eq!(raw.header("content-type"), "application/pdf");
     }
 }

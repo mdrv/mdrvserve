@@ -69,6 +69,10 @@ struct Args {
     /// Also serve `.typ` files alongside markdown, compiled to SVG via `typst` (directory mode)
     #[arg(long = "include-typst")]
     include_typst: bool,
+
+    /// Also list and serve `.pdf` files in the browser's built-in PDF viewer
+    #[arg(long = "include-pdf")]
+    include_pdf: bool,
 }
 
 #[tokio::main]
@@ -87,6 +91,11 @@ async fn main() -> Result<()> {
 
     let absolute_path = args.path.canonicalize().unwrap_or(args.path);
 
+    // A single file named explicitly on the command line is tracked even
+    // without its --include-* flag (`mdrvserve paper.pdf` just works).
+    let include_pdf =
+        args.include_pdf || (absolute_path.is_file() && app::is_pdf_file(&absolute_path));
+
     let (base_dir, tracked_files, is_directory_mode) = if absolute_path.is_file() {
         // Single-file mode: derive parent directory
         let base_dir = absolute_path
@@ -97,7 +106,13 @@ async fn main() -> Result<()> {
         (base_dir, tracked_files, false)
     } else if absolute_path.is_dir() {
         // Directory mode: scan directory for markdown files
-        let tracked_files = scan_markdown_files(&absolute_path, args.recursive, args.include_html, args.include_typst)?;
+        let tracked_files = scan_markdown_files(
+            &absolute_path,
+            args.recursive,
+            args.include_html,
+            args.include_typst,
+            include_pdf,
+        )?;
         if tracked_files.is_empty() {
             anyhow::bail!("No markdown files found in directory");
         }
@@ -125,6 +140,7 @@ async fn main() -> Result<()> {
         },
         args.include_html,
         args.include_typst,
+        include_pdf,
     )
     .await?;
 

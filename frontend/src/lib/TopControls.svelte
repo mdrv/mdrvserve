@@ -4,6 +4,7 @@
 		typstFlow = $bindable<'paged' | 'freeflow'>('paged'),
 		isTypst = false,
 		freeflowAvailable = false,
+		sourceAvailable = true,
 		theme,
 		lastModified = 0,
 		onopentheme,
@@ -13,6 +14,7 @@
 		typstFlow: 'paged' | 'freeflow'
 		isTypst: boolean
 		freeflowAvailable: boolean
+		sourceAvailable: boolean
 		theme: string
 		lastModified?: number
 		onopentheme: () => void
@@ -72,8 +74,10 @@
 		/>
 		<span class='zoom-value'>{pct}%</span>
 	</div>
-	<button class='source-btn' onclick={onopensource} aria-label='View source'>
-		📋
-	</button>
+	{#if sourceAvailable}
+		<button class='source-btn' onclick={onopensource} aria-label='View source'>
+			📋
+		</button>
+	{/if}
 	<button class='theme-toggle' onclick={onopentheme}>🎨</button>
 </div>

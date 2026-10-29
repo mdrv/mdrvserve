@@ -49,6 +49,7 @@ mdrvserve <PATH> [FLAGS]
 | `--with-frontmatter` |       | bool   | false       | Render leading YAML frontmatter as a two-column key/value table (GitHub-style). See [40 — Rendering](./40-rendering.md).                                                                   |
 | `--include-html`     |       | bool   | false       | Track `.html`/`.htm` files in directory mode (with D2/LaTeX/Typst post-processing).                                                                                                        |
 | `--include-typst`    |       | bool   | false       | Track `.typ` files in directory mode, compiled to SVG page(s) via the `typst` binary.                                                                                                      |
+| `--include-pdf`      |       | bool   | false       | Track `.pdf` files in directory mode; they open in the browser's built-in PDF viewer.                                                                                                      |
 | `--debug`            | `-d`  | bool   | false       | Verbose logging at DEBUG level (`RUST_LOG` overrides if set).                                                                                                                              |
 | `--trace`            |       | bool   | false       | Trace-level logging (`RUST_LOG` overrides if set).                                                                                                                                         |
 | `--help`             | `-h`  |        |             | Print help.                                                                                                                                                                                |
@@ -62,6 +63,7 @@ mdrvserve <PATH> [FLAGS]
 - **Diagrams:** opt-in. Mermaid, D2, LaTeX, and Typst are off by default; pass `--with-mermaid`, `--with-d2`, `--with-latex`, or `--with-typst` to enable. Themes are always available.
 - **HTML files:** markdown only by default. Pass `--include-html` to also track `.html`/`.htm` files in directory mode.
 - **Typst files:** pass `--include-typst` to also track `.typ` files in directory mode, each compiled to inlined SVG via the `typst` binary.
+- **PDF files:** pass `--include-pdf` to also track `.pdf` files in directory mode. Clicking one shows the browser's built-in PDF viewer embedded in the preview shell, with live reload on change (`?raw=1` at the end of the URL serves the raw bytes). A single `.pdf` path is accepted in single-file mode without the flag.
 - **GFM alerts:** off by default. Pass `--with-gfm` (alias `--gfm`) to render `> [!NOTE]`-style callouts server-side.
 - **Frontmatter:** off by default. Pass `--with-frontmatter` to render a leading YAML frontmatter block as a key/value table above the document.
 - **Logging:** INFO by default. Pass `--debug`/`-d` for DEBUG or `--trace` for TRACE; `RUST_LOG` overrides if set.
