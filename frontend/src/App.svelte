@@ -1,5 +1,6 @@
 <script lang='ts'>
 	import { onMount } from 'svelte'
+	import { mountPdfJsViewer, pdfNeedsFallback } from './lib/pdfjs'
 	import Sidebar from './lib/Sidebar.svelte'
 	import SidebarToggle from './lib/SidebarToggle.svelte'
 	import SourceModal from './lib/SourceModal.svelte'
@@ -65,6 +66,22 @@
 			? data.contentFreeflow
 			: data.content,
 	)
+	// Experimental pdf.js fallback: on browsers that cannot render PDFs
+	// inline (Chromium on Android, or no built-in viewer at all) swap the
+	// native iframe for a canvas-based viewer. The iframe stays in the DOM
+	// (hidden) because #content sizing keys off its presence via :has().
+	$effect(() => {
+		if (!data.isPdf || !pdfNeedsFallback()) return
+
+		const frame = document.querySelector<HTMLIFrameElement>('.pdf-frame')
+		if (!frame) return
+
+		frame.classList.add('pdfjs-hidden')
+		const wrapper = document.createElement('div')
+		wrapper.className = 'pdfjs-wrap'
+		frame.parentElement?.appendChild(wrapper)
+		void mountPdfJsViewer(wrapper, window.location.pathname + '?raw=1')
+	})
 
 	let mermaidApi: any = null
 	let mermaidLoading = false
@@ -257,17 +274,19 @@
 		/>
 	{/if}
 
-	<TopControls
-		bind:textZoom
-		bind:typstFlow
-		isTypst={data.isTypst}
-		lastModified={data.lastModified}
-		freeflowAvailable={freeflowAvailable}
-		sourceAvailable={data.sourceContent.trim() !== ''}
-		{theme}
-		onopentheme={() => (showThemeModal = true)}
-		onopensource={() => (showSourceModal = true)}
-	/>
+	{#if !data.isPdf}
+		<TopControls
+			bind:textZoom
+			bind:typstFlow
+			isTypst={data.isTypst}
+			lastModified={data.lastModified}
+			freeflowAvailable={freeflowAvailable}
+			sourceAvailable={data.sourceContent.trim() !== ''}
+			{theme}
+			onopentheme={() => (showThemeModal = true)}
+			onopensource={() => (showSourceModal = true)}
+		/>
+	{/if}
 
 	<div id='content'>{@html displayContent}</div>
 

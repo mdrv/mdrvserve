@@ -6,3 +6,8 @@
 # dist/bundle.js
 # vendor/
 # *.woff
+
+# Vendored third-party assets embedded into the binary (same as
+# static/js/mermaid.min.js); size impact is documented in the changelog.
+static/js/pdf.min.js
+static/js/pdf.worker.min.js

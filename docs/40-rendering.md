@@ -126,6 +126,36 @@ HTML feature enabled" — when the installed `typst` lacks the `--features html`
 export (probed once via `typst_html_available()`); there is no SVG fallback, a
 startup warning is logged, and paged rendering remains available.
 
+### PDF serving (`--include-pdf`)
+
+PDF files tracked via `--include-pdf` (a single `.pdf` path works without the
+flag) are not converted: clicking one serves a minimal wrapper page inside the
+regular shell — sidebar, themes and WebSocket reload all behave like a
+markdown page — embedding the bytes via `<iframe class="pdf-frame"
+src="{key}?raw=1">`. `?raw=1` on a PDF URL serves the raw bytes with
+`Content-Disposition: inline` and an mtime-based ETag (If-None-Match → 304),
+so the browser's built-in viewer renders them.
+
+Layout: on PDF pages the content area drops the centered document column and
+goes full-bleed from the sidebar's edge (`#content:has(> .pdf-frame)`), and
+the top-right controls are hidden (`data.isPdf`) — the native viewer has its
+own toolbar.
+
+**Experimental pdf.js fallback.** Chromium on Android cannot render PDFs
+inside iframes (it swaps the embed for a placeholder) even though
+`navigator.pdfViewerEnabled` reports `true` there, and some browsers report no
+viewer at all. On those clients the frontend hides the iframe and boots a
+bundled pdf.js viewer instead (`src/lib/pdfjs.ts`): continuous vertical
+canvas pages, fit-width, HiDPI-aware, lazily rendered on scroll. Detection
+runs client-side: `pdfViewerEnabled === false`, or an Android user agent that
+is not Firefox, activates the fallback; `?pdfjs=1` forces it and `?pdfjs=0`
+disables it on any browser. pdf.js (`pdfjs-dist` 3.11.174, Apache-2.0) is
+vendored under `static/js/` and served at `/pdf.min.js` and
+`/pdf.worker.min.js` with the same no-cache + ETag treatment as
+`/mermaid.min.js`; it loads only on pages where the fallback actually
+activates. Desktop browsers, iOS and Firefox on Android keep the native
+viewer.
+
 ### GFM alerts (server-side, `--with-gfm`)
 
 When `--with-gfm` (alias `--gfm`) is passed, a final post-processor
@@ -174,6 +204,7 @@ Without the flag the block is swallowed, exactly as before.
 | `showNavigation`  | boolean       | Whether to render the sidebar (directory mode only).                    |
 | `mermaidEnabled`  | boolean       | Whether the page contains mermaid blocks AND `--with-mermaid` is on.    |
 | `isTypst`         | boolean       | Whether the source is a `.typ` file (controls the free-flow toggle).    |
+| `isPdf`           | boolean       | Whether the page is a PDF wrapper (hides top controls, gates pdf.js).   |
 | `contentFreeflow` | string (HTML) | HTML-export free-flow rendering; empty when the feature is unavailable. |
 
 ## Sidebar tree

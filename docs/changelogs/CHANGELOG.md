@@ -6,5 +6,5 @@ All notable changes are documented in per-series files.
 
 | Series | File                   | Latest   |
 | ------ | ---------------------- | -------- |
-| 267.x  | [v267.x.md](v267.x.md) | v267.7.1 |
+| 267.x  | [v267.x.md](v267.x.md) | v267.8.0 |
 | 266.x  | [v266.x.md](v266.x.md) | v266.0.1 |

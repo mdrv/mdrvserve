@@ -247,22 +247,118 @@ body {
 
 /* PDF viewer pages: the iframe fills the content area and hosts the
    browser's built-in PDF viewer. */
-/* PDF pages: #content is a flex item in .has-nav, and an iframe has no
-   intrinsic width, so the flex item shrinks to the iframe's 300px
-   default. Claim the remaining width instead. */
-#content:has(> .pdf-frame) {
+/* PDF pages: a viewer, not a document — no markdown column styling.
+   Two traps: the sidebar is position:fixed, so #content is the only
+   in-flow flex item and starts at x=0 (the viewer would slide under
+   the sidebar), and an iframe has no intrinsic width, so the flex
+   item would shrink to the iframe's 300px default. Reserve the
+   sidebar's width explicitly and claim the rest. */
+.has-nav #content:has(> .pdf-frame) {
 	flex: 1 1 auto;
 	max-width: none;
-	margin-right: 20px;
+	margin: 0;
+	margin-left: var(--sidebar-width);
+	padding: 0;
+}
+
+/* `.sidebar-collapsed` is set on <html>, `.has-nav` on the root div —
+   so this must be a descendant selector, not a compound one. */
+.sidebar-collapsed .has-nav #content:has(> .pdf-frame) {
+	margin-left: var(--sidebar-collapsed-width);
+}
+
+.single-file #content:has(> .pdf-frame) {
+	max-width: none;
+	margin: 0;
+	padding: 0;
 }
 
 .pdf-frame {
 	display: block;
 	width: 100%;
-	height: calc(100vh - 40px);
+	height: 100vh;
 	border: 0;
-	border-radius: 4px;
 	background: var(--bg-color);
+}
+
+/* pdf.js fallback viewer (experimental; see src/lib/pdfjs.ts) */
+.pdf-frame.pdfjs-hidden {
+	display: none;
+}
+
+.pdfjs-wrap {
+	position: relative;
+	height: 100dvh;
+}
+
+.pdfjs-viewer {
+	height: 100%;
+	overflow: auto;
+	/* Native one-finger scrolling (both axes, incl. free pan when
+	   zoomed); the two-finger pinch is handled in JS instead of
+	   zooming the whole page. */
+	touch-action: pan-x pan-y;
+	background: var(--bg-color);
+}
+
+.pdfjs-viewer.pdfjs-h {
+	display: flex;
+	overflow-x: auto;
+	scroll-snap-type: x mandatory;
+}
+
+/* While zoomed, free panning wins over slide snapping. */
+.pdfjs-viewer.pdfjs-h.pdfjs-zoomed {
+	scroll-snap-type: none;
+}
+
+.pdfjs-page {
+	margin: 12px auto;
+	flex: 0 0 auto;
+	scroll-snap-align: center;
+	scroll-snap-stop: always;
+}
+
+.pdfjs-viewer.pdfjs-h .pdfjs-page {
+	margin: 0;
+}
+
+.pdfjs-box {
+	width: 100%;
+}
+
+/* Slideshow: one page per view, sized to fit the viewer height. */
+.pdfjs-viewer.pdfjs-h .pdfjs-box {
+	height: 100%;
+	width: auto;
+	margin: 0 auto;
+}
+
+.pdfjs-indicator {
+	position: absolute;
+	top: 12px;
+	left: 50%;
+	translate: -50% 0;
+	padding: 2px 10px;
+	border-radius: 999px;
+	border: 1px solid var(--border-color-light);
+	background: var(--bg-color);
+	font-size: 0.85rem;
+	pointer-events: none;
+	z-index: 2;
+}
+
+.pdfjs-flow-btn {
+	position: absolute;
+	right: 12px;
+	bottom: 12px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	border: 1px solid var(--border-color-light);
+	background: var(--bg-color);
+	color: inherit;
+	cursor: pointer;
+	z-index: 2;
 }
 
 .sidebar-collapsed #content {

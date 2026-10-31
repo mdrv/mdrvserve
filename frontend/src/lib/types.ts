@@ -14,6 +14,7 @@ export interface ServerData {
 	showNavigation: boolean
 	mermaidEnabled: boolean
 	isTypst: boolean
+	isPdf: boolean
 	contentFreeflow: string
 	lastModified: number
 }

@@ -37,7 +37,9 @@ use tracing::{debug, error, info, trace, warn};
 
 const APP_HTML: &str = include_str!("../frontend/dist/index.html");
 const MERMAID_JS: &str = include_str!("../static/js/mermaid.min.js");
-const MERMAID_ETAG: &str = concat!("\"", env!("CARGO_PKG_VERSION"), "\"");
+const PDFJS_JS: &str = include_str!("../static/js/pdf.min.js");
+const PDFJS_WORKER_JS: &str = include_str!("../static/js/pdf.worker.min.js");
+const ASSET_ETAG: &str = concat!("\"", env!("CARGO_PKG_VERSION"), "\"");
 const MAX_PORT_ATTEMPTS: u16 = 10;
 
 /// Opt-in diagram rendering engines.
@@ -731,6 +733,8 @@ fn new_router(
         .route("/", get(serve_html_root))
         .route("/ws", get(websocket_handler))
         .route("/mermaid.min.js", get(serve_mermaid_js))
+        .route("/pdf.min.js", get(serve_pdfjs_js))
+        .route("/pdf.worker.min.js", get(serve_pdfjs_worker_js))
         .route("/{*filename}", get(serve_file))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -1622,6 +1626,8 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
         Vec::new()
     };
 
+    let is_pdf = is_pdf_file(Path::new(current_file));
+
     let data = serde_json::json!({
         "content": content,
         "sourceContent": source,
@@ -1630,6 +1636,7 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
         "showNavigation": show_nav,
         "mermaidEnabled": has_mermaid,
         "isTypst": is_typst,
+        "isPdf": is_pdf,
         "contentFreeflow": content_freeflow,
         "lastModified": last_modified,
     });
@@ -1644,27 +1651,43 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
 }
 
 async fn serve_mermaid_js(headers: HeaderMap) -> impl IntoResponse {
-    if is_etag_match(&headers) {
-        return mermaid_response(StatusCode::NOT_MODIFIED, None);
+    if is_etag_match(&headers, ASSET_ETAG) {
+        return static_js_response(StatusCode::NOT_MODIFIED, None);
     }
 
-    mermaid_response(StatusCode::OK, Some(MERMAID_JS))
+    static_js_response(StatusCode::OK, Some(MERMAID_JS))
 }
 
-fn is_etag_match(headers: &HeaderMap) -> bool {
+async fn serve_pdfjs_js(headers: HeaderMap) -> impl IntoResponse {
+    if is_etag_match(&headers, ASSET_ETAG) {
+        return static_js_response(StatusCode::NOT_MODIFIED, None);
+    }
+
+    static_js_response(StatusCode::OK, Some(PDFJS_JS))
+}
+
+async fn serve_pdfjs_worker_js(headers: HeaderMap) -> impl IntoResponse {
+    if is_etag_match(&headers, ASSET_ETAG) {
+        return static_js_response(StatusCode::NOT_MODIFIED, None);
+    }
+
+    static_js_response(StatusCode::OK, Some(PDFJS_WORKER_JS))
+}
+
+fn is_etag_match(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|etags| etags.split(',').any(|tag| tag.trim() == MERMAID_ETAG))
+        .is_some_and(|etags| etags.split(',').any(|tag| tag.trim() == etag))
 }
 
-fn mermaid_response(status: StatusCode, body: Option<&'static str>) -> impl IntoResponse {
+fn static_js_response(status: StatusCode, body: Option<&'static str>) -> impl IntoResponse {
     // Use no-cache to force revalidation on each request. This ensures clients
-    // get updated content when mdserve is rebuilt with a new Mermaid version,
+    // get updated content when mdrvserve is rebuilt with new bundled assets,
     // while still benefiting from 304 responses via ETag matching.
     let headers = [
         (header::CONTENT_TYPE, "application/javascript"),
-        (header::ETAG, MERMAID_ETAG),
+        (header::ETAG, ASSET_ETAG),
         (header::CACHE_CONTROL, "public, no-cache"),
     ];
 
@@ -3572,11 +3595,43 @@ $$\n";
 
         let response = server.get("/doc.pdf").await;
         assert_eq!(response.status_code(), 200);
-        let content = extract_content(&response.text());
+        let body = response.text();
+        let content = extract_content(&body);
         assert!(
             content.contains(r#"<iframe class="pdf-frame" src="doc.pdf?raw=1""#),
             "wrapper should embed the raw pdf via iframe, got: {content}"
         );
+        let data = extract_mdrv_data(&body);
+        assert_eq!(data["isPdf"], true, "pdf page should set isPdf");
+    }
+
+    #[tokio::test]
+    async fn test_pdfjs_assets_served() {
+        let (server, _temp_dir) = create_pdf_directory_server(true, false);
+
+        for path in ["/pdf.min.js", "/pdf.worker.min.js"] {
+            let response = server.get(path).await;
+            assert_eq!(
+                response.status_code(),
+                200,
+                "pdf.js asset {path} should be served"
+            );
+            let content_type = response.header("content-type");
+            assert!(
+                content_type.to_str().unwrap().contains("javascript"),
+                "pdf.js asset {path} should be javascript"
+            );
+
+            let revalidated = server
+                .get(path)
+                .add_header("if-none-match", ASSET_ETAG)
+                .await;
+            assert_eq!(
+                revalidated.status_code(),
+                304,
+                "pdf.js asset {path} should revalidate via etag"
+            );
+        }
     }
 
     #[tokio::test]
