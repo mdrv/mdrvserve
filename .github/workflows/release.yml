@@ -75,10 +75,16 @@ jobs:
           case $T in
             armv7-*)
               # cross-compiled ARM: the x64 runner cannot execute the ELF
-              # directly; run it under qemu-user-static instead
-              command -v qemu-arm-static >/dev/null 2>&1 || \
-                sudo apt-get install -y qemu-user-static
-              qemu-arm-static $B --version
+              # directly; run it under qemu-user instead. Newer Ubuntu
+              # images dropped the qemu-user-static package (it became a
+              # virtual package, provided by qemu-user-binfmt), so fall
+              # back to the plain qemu-user package and its qemu-arm.
+              if ! command -v qemu-arm-static >/dev/null 2>&1; then
+                sudo apt-get install -y qemu-user-static \
+                  || sudo apt-get install -y qemu-user
+              fi
+              EMU=$(command -v qemu-arm-static || command -v qemu-arm)
+              $EMU $B --version
               ;;
             aarch64-pc-windows-msvc)
               # cross-compiled ARM64 PE: nothing on the x64 runner executes it
