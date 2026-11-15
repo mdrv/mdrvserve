@@ -73,6 +73,10 @@ struct Args {
     /// Also list and serve `.pdf` files in the browser's built-in PDF viewer
     #[arg(long = "include-pdf")]
     include_pdf: bool,
+
+    /// Also list and serve `.svg` files in the preview shell
+    #[arg(long = "include-svg")]
+    include_svg: bool,
 }
 
 #[tokio::main]
@@ -95,6 +99,8 @@ async fn main() -> Result<()> {
     // without its --include-* flag (`mdrvserve paper.pdf` just works).
     let include_pdf =
         args.include_pdf || (absolute_path.is_file() && app::is_pdf_file(&absolute_path));
+    let include_svg =
+        args.include_svg || (absolute_path.is_file() && app::is_svg_file(&absolute_path));
 
     let (base_dir, tracked_files, is_directory_mode) = if absolute_path.is_file() {
         // Single-file mode: derive parent directory
@@ -112,6 +118,7 @@ async fn main() -> Result<()> {
             args.include_html,
             args.include_typst,
             include_pdf,
+            include_svg,
         )?;
         if tracked_files.is_empty() {
             anyhow::bail!("No markdown files found in directory");
@@ -141,6 +148,7 @@ async fn main() -> Result<()> {
         args.include_html,
         args.include_typst,
         include_pdf,
+        include_svg,
     )
     .await?;
 

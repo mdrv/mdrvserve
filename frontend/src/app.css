@@ -281,6 +281,34 @@ body {
 	background: var(--bg-color);
 }
 
+/* SVG pages: the same flex traps as PDF pages — #content starts at
+   x=0 under the fixed-position sidebar. Claim the remaining width
+   and center the image inside it. */
+.has-nav #content:has(> .svg-frame) {
+	flex: 1 1 auto;
+	max-width: none;
+	margin: 0;
+	margin-left: var(--sidebar-width);
+	padding: 0;
+}
+
+.sidebar-collapsed .has-nav #content:has(> .svg-frame) {
+	margin-left: var(--sidebar-collapsed-width);
+}
+
+.single-file #content:has(> .svg-frame) {
+	max-width: none;
+	margin: 0;
+	padding: 0;
+}
+
+.svg-frame {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	margin: 20px auto;
+}
+
 /* pdf.js fallback viewer (experimental; see src/lib/pdfjs.ts) */
 .pdf-frame.pdfjs-hidden {
 	display: none;

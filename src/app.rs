@@ -75,17 +75,27 @@ pub(crate) fn scan_markdown_files(
     include_html: bool,
     include_typst: bool,
     include_pdf: bool,
+    include_svg: bool,
 ) -> Result<Vec<PathBuf>> {
     let mut md_files = Vec::new();
 
     if recursive {
-        collect_markdown_recursive(dir, &mut md_files, include_html, include_typst, include_pdf)?;
+        collect_markdown_recursive(
+            dir,
+            &mut md_files,
+            include_html,
+            include_typst,
+            include_pdf,
+            include_svg,
+        )?;
     } else {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && is_tracked_file(&path, include_html, include_typst, include_pdf) {
+            if path.is_file()
+                && is_tracked_file(&path, include_html, include_typst, include_pdf, include_svg)
+            {
                 md_files.push(path);
             }
         }
@@ -102,14 +112,23 @@ fn collect_markdown_recursive(
     include_html: bool,
     include_typst: bool,
     include_pdf: bool,
+    include_svg: bool,
 ) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_dir() {
-            collect_markdown_recursive(&path, md_files, include_html, include_typst, include_pdf)?;
-        } else if path.is_file() && is_tracked_file(&path, include_html, include_typst, include_pdf)
+            collect_markdown_recursive(
+                &path,
+                md_files,
+                include_html,
+                include_typst,
+                include_pdf,
+                include_svg,
+            )?;
+        } else if path.is_file()
+            && is_tracked_file(&path, include_html, include_typst, include_pdf, include_svg)
         {
             md_files.push(path);
         }
@@ -149,20 +168,29 @@ pub(crate) fn is_pdf_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn is_svg_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false)
+}
+
 /// Returns true if the file should be tracked. Markdown files are always
 /// tracked; HTML files are tracked when `include_html` is set; Typst files
 /// are tracked when `include_typst` is set; PDF files are tracked when
-/// `include_pdf` is set.
+/// `include_pdf` is set; SVG files are tracked when `include_svg` is set.
 fn is_tracked_file(
     path: &Path,
     include_html: bool,
     include_typst: bool,
     include_pdf: bool,
+    include_svg: bool,
 ) -> bool {
     is_markdown_file(path)
         || (include_html && is_html_file(path))
         || (include_typst && is_typst_file(path))
         || (include_pdf && is_pdf_file(path))
+        || (include_svg && is_svg_file(path))
 }
 
 fn is_typst_file(path: &Path) -> bool {
@@ -193,10 +221,12 @@ struct MarkdownState {
     include_html: bool,
     include_typst: bool,
     include_pdf: bool,
+    include_svg: bool,
     change_tx: broadcast::Sender<ServerMessage>,
 }
 
 impl MarkdownState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         base_dir: PathBuf,
         file_paths: Vec<PathBuf>,
@@ -205,6 +235,7 @@ impl MarkdownState {
         include_html: bool,
         include_typst: bool,
         include_pdf: bool,
+        include_svg: bool,
     ) -> Result<Self> {
         let (change_tx, _) = broadcast::channel::<ServerMessage>(16);
 
@@ -245,6 +276,7 @@ impl MarkdownState {
             include_html,
             include_typst,
             include_pdf,
+            include_svg,
             change_tx,
         })
     }
@@ -305,8 +337,8 @@ impl MarkdownState {
 
     /// Render a file's source into (html, html_freeflow). Markdown and HTML
     /// are infallible; Typst compilation falls back to a source listing on
-    /// any error so one bad file never breaks serving. PDFs are never read
-    /// as source — they render to a wrapper iframe over the raw bytes.
+    /// any error so one bad file never breaks serving. PDFs and SVGs render
+    /// to a wrapper page over the raw bytes instead of their source.
     fn render_file_content(
         content: &str,
         path: &Path,
@@ -316,6 +348,8 @@ impl MarkdownState {
         let is_typst = is_typst_file(path);
         let html = if is_pdf_file(path) {
             render_pdf_wrapper(filename)
+        } else if is_svg_file(path) {
+            render_svg_wrapper(filename)
         } else if is_typst {
             render_typst_document(content).unwrap_or_default()
         } else if is_html_file(path) {
@@ -590,6 +624,7 @@ async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
         state_guard.include_html,
         state_guard.include_typst,
         state_guard.include_pdf,
+        state_guard.include_svg,
     ) {
         return;
     }
@@ -666,9 +701,36 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
                     }
                 } else if path.is_file() && is_image_file(path.to_str().unwrap_or("")) {
                     match event.kind {
-                        notify::EventKind::Modify(_)
-                        | notify::EventKind::Create(_)
-                        | notify::EventKind::Remove(_) => {
+                        // Only writes and removals matter: read activity
+                        // from serving the file itself arrives as Access
+                        // events and must not trigger anything, or a
+                        // tracked SVG would refresh (re-read) itself
+                        // forever.
+                        notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
+                            // Tracked SVGs go through the normal change
+                            // path so their entry is refreshed; untracked
+                            // ones (plain images referenced from markdown)
+                            // have no tracked state and just trigger a
+                            // page reload.
+                            if is_svg_file(path) {
+                                let svg_tracked = {
+                                    let state_guard = state.lock().await;
+                                    state_guard
+                                        .tracked_files
+                                        .contains_key(&relative_key(path, &state_guard.base_dir))
+                                };
+                                if svg_tracked {
+                                    handle_markdown_file_change(path, state).await;
+                                } else {
+                                    let state_guard = state.lock().await;
+                                    let _ = state_guard.change_tx.send(ServerMessage::Reload);
+                                }
+                            } else {
+                                let state_guard = state.lock().await;
+                                let _ = state_guard.change_tx.send(ServerMessage::Reload);
+                            }
+                        }
+                        notify::EventKind::Remove(_) => {
                             let state_guard = state.lock().await;
                             let _ = state_guard.change_tx.send(ServerMessage::Reload);
                         }
@@ -690,6 +752,7 @@ fn new_router(
     include_html: bool,
     include_typst: bool,
     include_pdf: bool,
+    include_svg: bool,
 ) -> Result<Router> {
     let base_dir = base_dir.canonicalize()?;
 
@@ -701,6 +764,7 @@ fn new_router(
         include_html,
         include_typst,
         include_pdf,
+        include_svg,
     )?));
 
     let watcher_state = state.clone();
@@ -778,6 +842,7 @@ pub(crate) async fn serve_markdown(
     include_html: bool,
     include_typst: bool,
     include_pdf: bool,
+    include_svg: bool,
 ) -> Result<()> {
     let hostname = hostname.as_ref();
 
@@ -814,6 +879,7 @@ pub(crate) async fn serve_markdown(
         include_html,
         include_typst,
         include_pdf,
+        include_svg,
     )?;
 
     let (listener, actual_port) = bind_with_retry(hostname, port).await?;
@@ -937,8 +1003,8 @@ async fn serve_file(
     State(state): State<SharedMarkdownState>,
 ) -> axum::response::Response {
     debug!(file = %filename, "serving request");
-    // `?raw` selects the raw bytes of a binary file (currently PDF);
-    // without it a PDF is served wrapped in the standard page shell.
+    // `?raw` selects the raw bytes of a wrapper file (PDF or SVG);
+    // without it the file is served wrapped in the standard page shell.
     let wants_raw = raw_query
         .as_deref()
         .unwrap_or("")
@@ -967,7 +1033,28 @@ async fn serve_file(
         }
 
         if wants_raw {
-            serve_pdf_raw(&state, &filename, &headers).await
+            serve_raw_file(&state, &filename, &headers, "application/pdf").await
+        } else {
+            state.ensure_rendered(&filename);
+            let (status, html) = render_markdown(&state, &filename).await;
+            (status, html).into_response()
+        }
+    } else if filename.ends_with(".svg") {
+        // An <img> inside markdown advertises image/svg+xml in its
+        // Accept header; a top-level navigation does not. Serve raw
+        // bytes to images (so markdown embedding works even when the
+        // file is tracked) and the wrapper page to navigation.
+        let wants_image = headers
+            .get(header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|accept| accept.contains("image/svg+xml"));
+        let tracked = state.lock().await.tracked_files.contains_key(&filename);
+        if !tracked || wants_image {
+            return serve_static_file_inner(filename, state).await;
+        }
+        let mut state = state.lock().await;
+        if wants_raw {
+            serve_raw_file(&state, &filename, &headers, "image/svg+xml").await
         } else {
             state.ensure_rendered(&filename);
             let (status, html) = render_markdown(&state, &filename).await;
@@ -1157,6 +1244,20 @@ fn render_pdf_wrapper(filename: &str) -> String {
         .unwrap_or(filename);
     format!(
         "<iframe class=\"pdf-frame\" src=\"{}?raw=1\" title=\"{}\"></iframe>",
+        escape_attr(filename),
+        escape_attr(name)
+    )
+}
+
+/// Body of the wrapper page for a tracked SVG: an <img> over the raw
+/// bytes, in the standard shell so an edited SVG refreshes live.
+fn render_svg_wrapper(filename: &str) -> String {
+    let name = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename);
+    format!(
+        "<img class=\"svg-frame\" src=\"{}?raw=1\" alt=\"{}\">",
         escape_attr(filename),
         escape_attr(name)
     )
@@ -1743,14 +1844,15 @@ async fn serve_static_file_inner(
     }
 }
 
-/// Serve the raw bytes of a tracked PDF (`file.pdf?raw=1`) for the
-/// wrapper iframe's native viewer. Read from disk per request — PDFs are
-/// binary and potentially large — with an mtime-based ETag so the browser
-/// can revalidate instead of re-downloading.
-async fn serve_pdf_raw(
+/// Serve the raw bytes of a tracked wrapper file (`file.pdf?raw=1`,
+/// `icon.svg?raw=1`) for the wrapper page's embed. Read from disk per
+/// request with an mtime-based ETag so the browser can revalidate
+/// instead of re-downloading.
+async fn serve_raw_file(
     state: &MarkdownState,
     filename: &str,
     headers: &HeaderMap,
+    content_type: &'static str,
 ) -> axum::response::Response {
     let full_path = state.base_dir.join(filename);
     let Ok(canonical_path) = full_path.canonicalize() else {
@@ -1771,7 +1873,7 @@ async fn serve_pdf_raw(
         return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
     };
 
-    let etag = pdf_etag(modified, bytes.len());
+    let etag = mtime_etag(modified, bytes.len());
     if let Some(given) = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -1784,15 +1886,12 @@ async fn serve_pdf_raw(
     let name = std::path::Path::new(filename)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("document.pdf")
+        .unwrap_or(filename)
         .replace('"', "");
     let disposition = format!("inline; filename=\"{name}\"");
     let mut response = (StatusCode::OK, bytes).into_response();
     let response_headers = response.headers_mut();
-    response_headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/pdf"),
-    );
+    response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     response_headers.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("inline")),
@@ -1805,7 +1904,7 @@ async fn serve_pdf_raw(
     response
 }
 
-fn pdf_etag(modified: SystemTime, len: usize) -> String {
+fn mtime_etag(modified: SystemTime, len: usize) -> String {
     let secs = modified
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -2028,7 +2127,7 @@ mod tests {
     fn test_scan_markdown_files_empty_directory() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
             .expect("Failed to scan");
         assert_eq!(result.len(), 0);
     }
@@ -2044,7 +2143,7 @@ mod tests {
         fs::write(temp_dir.path().join("test.txt"), "text").expect("Failed to write");
         fs::write(temp_dir.path().join("README"), "readme").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
             .expect("Failed to scan");
 
         assert_eq!(result.len(), 3);
@@ -2066,7 +2165,7 @@ mod tests {
         fs::create_dir(&sub_dir).expect("Failed to create subdir");
         fs::write(sub_dir.join("nested.md"), "# Nested").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
             .expect("Failed to scan");
 
         assert_eq!(result.len(), 1);
@@ -2082,7 +2181,7 @@ mod tests {
         fs::write(temp_dir.path().join("test3.Md"), "# Test 3").expect("Failed to write");
         fs::write(temp_dir.path().join("test4.MARKDOWN"), "# Test 4").expect("Failed to write");
 
-        let result = scan_markdown_files(temp_dir.path(), false, false, false, false)
+        let result = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
             .expect("Failed to scan");
 
         assert_eq!(result.len(), 4);
@@ -2103,12 +2202,12 @@ mod tests {
         fs::write(nested_dir.join("deeper.md"), "# Deeper").expect("Failed to write");
 
         // Non-recursive still ignores nested files
-        let flat = scan_markdown_files(temp_dir.path(), false, false, false, false)
+        let flat = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
             .expect("Failed to scan");
         assert_eq!(flat.len(), 1);
 
         // Recursive picks up nested files
-        let result = scan_markdown_files(temp_dir.path(), true, false, false, false)
+        let result = scan_markdown_files(temp_dir.path(), true, false, false, false, false)
             .expect("Failed to scan");
         assert_eq!(result.len(), 3);
     }
@@ -2226,6 +2325,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("Failed to create router");
 
@@ -2272,7 +2372,7 @@ mod tests {
             .expect("Failed to write test3.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, false, false, false, false)
+        let tracked_files = scan_markdown_files(&base_dir, false, false, false, false, false)
             .expect("Failed to scan markdown files");
         let is_directory_mode = true;
 
@@ -2282,6 +2382,7 @@ mod tests {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
             false,
             false,
             false,
@@ -2317,8 +2418,8 @@ mod tests {
             .expect("Failed to write guide/intro.md");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files =
-            scan_markdown_files(&base_dir, true, false, false, false).expect("Failed to scan");
+        let tracked_files = scan_markdown_files(&base_dir, true, false, false, false, false)
+            .expect("Failed to scan");
         let is_directory_mode = true;
 
         let router = new_router(
@@ -2327,6 +2428,7 @@ mod tests {
             is_directory_mode,
             true,
             DiagramOpts::default(),
+            false,
             false,
             false,
             false,
@@ -2458,6 +2560,7 @@ fn main() {
             false,
             false,
             false,
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -2494,6 +2597,7 @@ fn main() {
             is_directory_mode,
             false,
             DiagramOpts::default(),
+            false,
             false,
             false,
             false,
@@ -2764,8 +2868,8 @@ classDiagram
         fs::write(temp_dir.path().join("doc.typ"), typ_content).expect("Failed to write doc.typ");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files =
-            scan_markdown_files(&base_dir, false, false, true, false).expect("Failed to scan");
+        let tracked_files = scan_markdown_files(&base_dir, false, false, true, false, false)
+            .expect("Failed to scan");
         assert_eq!(
             tracked_files.len(),
             1,
@@ -2780,6 +2884,7 @@ classDiagram
             DiagramOpts::default(),
             false,
             true,
+            false,
             false,
         )
         .expect("Failed to create router");
@@ -2815,8 +2920,8 @@ classDiagram
         fs::write(temp_dir.path().join("doc.typ"), "Hello Typst.\n")
             .expect("Failed to write doc.typ");
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files =
-            scan_markdown_files(&base_dir, false, false, true, false).expect("Failed to scan");
+        let tracked_files = scan_markdown_files(&base_dir, false, false, true, false, false)
+            .expect("Failed to scan");
         let router = new_router(
             base_dir,
             tracked_files,
@@ -2825,6 +2930,7 @@ classDiagram
             DiagramOpts::default(),
             false,
             true,
+            false,
             false,
         )
         .expect("Failed to create router");
@@ -2946,6 +3052,7 @@ $$\n";
             false,
             opts,
             true,
+            false,
             false,
             false,
         )
@@ -3535,7 +3642,7 @@ $$\n";
             .expect("Failed to write doc.pdf");
 
         let base_dir = temp_dir.path().to_path_buf();
-        let tracked_files = scan_markdown_files(&base_dir, false, false, false, include_pdf)
+        let tracked_files = scan_markdown_files(&base_dir, false, false, false, include_pdf, false)
             .expect("Failed to scan markdown files");
         let router = new_router(
             base_dir,
@@ -3546,6 +3653,7 @@ $$\n";
             false,
             false,
             include_pdf,
+            false,
         )
         .expect("Failed to create router");
 
@@ -3576,7 +3684,7 @@ $$\n";
         fs::write(temp_dir.path().join("doc.pdf"), TEST_PDF_BYTES)
             .expect("Failed to write doc.pdf");
 
-        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, false)
+        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
             .expect("Failed to scan");
         assert_eq!(
             tracked.len(),
@@ -3584,7 +3692,7 @@ $$\n";
             "pdf must not be tracked without --include-pdf"
         );
 
-        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, true)
+        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, true, false)
             .expect("Failed to scan");
         assert_eq!(tracked.len(), 2, "pdf should be tracked with --include-pdf");
     }
@@ -3725,6 +3833,7 @@ $$\n";
             false,
             false,
             true,
+            false,
         )
         .expect("Failed to create router");
         let server = TestServer::new(router);
@@ -3738,5 +3847,217 @@ $$\n";
         let raw = server.get("/paper.pdf").add_query_param("raw", "1").await;
         assert_eq!(raw.status_code(), 200);
         assert_eq!(raw.header("content-type"), "application/pdf");
+    }
+
+    const TEST_SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\"><rect width=\"40\" height=\"40\" fill=\"teal\"/></svg>";
+
+    fn create_svg_directory_server(include_svg: bool, use_http: bool) -> (TestServer, TempDir) {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+
+        fs::write(temp_dir.path().join("test1.md"), TEST_FILE_1_CONTENT)
+            .expect("Failed to write test1.md");
+        fs::write(temp_dir.path().join("icon.svg"), TEST_SVG).expect("Failed to write icon.svg");
+
+        let base_dir = temp_dir.path().to_path_buf();
+        let tracked_files = scan_markdown_files(&base_dir, false, false, false, false, include_svg)
+            .expect("Failed to scan markdown files");
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            true,
+            false,
+            DiagramOpts::default(),
+            false,
+            false,
+            false,
+            include_svg,
+        )
+        .expect("Failed to create router");
+
+        let server = if use_http {
+            TestServer::builder().http_transport().build(router)
+        } else {
+            TestServer::new(router)
+        };
+
+        (server, temp_dir)
+    }
+
+    #[test]
+    fn test_is_svg_file_detection() {
+        assert!(is_svg_file(Path::new("icon.svg")));
+        assert!(is_svg_file(Path::new("icon.SVG")));
+        assert!(is_svg_file(Path::new("a/b/icon.svg")));
+        assert!(!is_svg_file(Path::new("icon.svgx")));
+        assert!(!is_svg_file(Path::new("icon")));
+    }
+
+    #[test]
+    fn test_svg_scan_respects_flag() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        fs::write(temp_dir.path().join("test1.md"), TEST_FILE_1_CONTENT)
+            .expect("Failed to write test1.md");
+        fs::write(temp_dir.path().join("icon.svg"), TEST_SVG).expect("Failed to write icon.svg");
+
+        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, false, false)
+            .expect("Failed to scan");
+        assert_eq!(
+            tracked.len(),
+            1,
+            "svg must not be tracked without --include-svg"
+        );
+
+        let tracked = scan_markdown_files(temp_dir.path(), false, false, false, false, true)
+            .expect("Failed to scan");
+        assert_eq!(tracked.len(), 2, "svg should be tracked with --include-svg");
+    }
+
+    #[tokio::test]
+    async fn test_svg_served_as_wrapper_page() {
+        let (server, _temp_dir) = create_svg_directory_server(true, false);
+
+        let response = server.get("/icon.svg").await;
+        assert_eq!(response.status_code(), 200);
+        let body = response.text();
+        let content = extract_content(&body);
+        assert!(
+            content.contains(r#"<img class="svg-frame" src="icon.svg?raw=1""#),
+            "wrapper should embed the raw svg via img, got: {content}"
+        );
+        let data = extract_mdrv_data(&body);
+        assert_eq!(data["isPdf"], false, "svg page is not a pdf wrapper");
+    }
+
+    #[tokio::test]
+    async fn test_svg_listed_in_nav() {
+        let (server, _temp_dir) = create_svg_directory_server(true, false);
+
+        let nav = extract_nav_json(&server.get("/").await.text());
+        assert!(
+            nav.contains("icon.svg"),
+            "sidebar should list icon.svg: {nav}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_svg_raw_bytes_served_inline() {
+        let (server, _temp_dir) = create_svg_directory_server(true, false);
+
+        let response = server.get("/icon.svg").add_query_param("raw", "1").await;
+        assert_eq!(response.status_code(), 200);
+        assert_eq!(response.header("content-type"), "image/svg+xml");
+        let disposition_value = response.header("content-disposition");
+        let disposition = disposition_value.to_str().unwrap();
+        assert!(
+            disposition.starts_with("inline"),
+            "raw svg must be inline, not attachment: {disposition}"
+        );
+        assert!(!response.header("etag").to_str().unwrap().is_empty());
+        assert_eq!(response.text(), TEST_SVG);
+    }
+
+    #[tokio::test]
+    async fn test_svg_raw_conditional_request_not_modified() {
+        let (server, _temp_dir) = create_svg_directory_server(true, false);
+
+        let first = server.get("/icon.svg").add_query_param("raw", "1").await;
+        let etag = first.header("etag");
+
+        let second = server
+            .get("/icon.svg")
+            .add_query_param("raw", "1")
+            .add_header("if-none-match", etag.to_str().unwrap())
+            .await;
+        assert_eq!(second.status_code(), 304);
+    }
+
+    #[tokio::test]
+    async fn test_svg_untracked_served_as_plain_image() {
+        let (server, _temp_dir) = create_svg_directory_server(false, false);
+
+        // Without --include-svg the file is not tracked (no wrapper, no
+        // sidebar entry) but markdown embedding must keep working.
+        let response = server.get("/icon.svg").await;
+        assert_eq!(response.status_code(), 200);
+        assert_eq!(response.header("content-type"), "image/svg+xml");
+        assert_eq!(response.text(), TEST_SVG);
+    }
+
+    #[tokio::test]
+    async fn test_tracked_svg_serves_raw_bytes_to_img_requests() {
+        let (server, _temp_dir) = create_svg_directory_server(true, false);
+
+        // An <img> inside markdown advertises image/svg+xml in its Accept
+        // header; even a tracked file must serve raw bytes to it, not the
+        // wrapper page.
+        let response = server
+            .get("/icon.svg")
+            .add_header(
+                "accept",
+                "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            )
+            .await;
+        assert_eq!(response.status_code(), 200);
+        assert_eq!(response.header("content-type"), "image/svg+xml");
+        assert_eq!(response.text(), TEST_SVG);
+    }
+
+    #[tokio::test]
+    async fn test_svg_modification_triggers_reload() {
+        let (server, temp_dir) = create_svg_directory_server(true, true);
+
+        let mut websocket = server.get_websocket("/ws").await.into_websocket().await;
+
+        fs::write(
+            temp_dir.path().join("icon.svg"),
+            TEST_SVG.replace("teal", "navy"),
+        )
+        .expect("Failed to modify icon.svg");
+
+        tokio::time::sleep(Duration::from_millis(FILE_WATCH_DELAY_MS)).await;
+
+        let update_result = tokio::time::timeout(
+            Duration::from_secs(WEBSOCKET_TIMEOUT_SECS),
+            websocket.receive_json::<ServerMessage>(),
+        )
+        .await;
+
+        update_result.expect("Timeout waiting for WebSocket update after svg modification");
+    }
+
+    #[tokio::test]
+    async fn test_single_file_svg_mode() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let svg_path = temp_dir.path().join("icon.svg");
+        fs::write(&svg_path, TEST_SVG).expect("Failed to write icon.svg");
+        let canonical_path = svg_path.canonicalize().expect("canonicalize failed");
+        let base_dir = canonical_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
+
+        let router = new_router(
+            base_dir,
+            vec![canonical_path],
+            false,
+            false,
+            DiagramOpts::default(),
+            false,
+            false,
+            false,
+            true,
+        )
+        .expect("Failed to create router");
+        let server = TestServer::new(router);
+
+        // Root serves the single tracked file; the wrapper embeds the raw svg.
+        let response = server.get("/").await;
+        assert_eq!(response.status_code(), 200);
+        let content = extract_content(&response.text());
+        assert!(content.contains(r#"src="icon.svg?raw=1""#));
+
+        let raw = server.get("/icon.svg").add_query_param("raw", "1").await;
+        assert_eq!(raw.status_code(), 200);
+        assert_eq!(raw.header("content-type"), "image/svg+xml");
     }
 }

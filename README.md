@@ -29,7 +29,8 @@ is not a long-running server and doesn't need to be.
 frontmatter rendered as a key/value table (`--with-frontmatter`), opt-in
 D2 / Mermaid / LaTeX math / Typst support, HTML file serving (`--include-html`),
 Typst file serving (`--include-typst`), PDF listing (`--include-pdf`, with an
-experimental bundled pdf.js fallback for browsers that can't embed PDFs), and directory
+experimental bundled pdf.js fallback for browsers that can't embed PDFs), SVG
+listing (`--include-svg`), and directory
 mode with a navigation sidebar — including `--recursive`
 support for nested subdirectories shown as collapsible groups. Sidebar
 filter with wildcard patterns, source view, and scroll persistence round

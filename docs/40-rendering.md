@@ -156,6 +156,27 @@ vendored under `static/js/` and served at `/pdf.min.js` and
 activates. Desktop browsers, iOS and Firefox on Android keep the native
 viewer.
 
+### SVG serving (`--include-svg`)
+
+SVG files tracked via `--include-svg` (a single `.svg` path works without the
+flag) render as a centered `<img class="svg-frame" src="{key}?raw=1">` inside
+the regular shell — sidebar, themes, source view and WebSocket reload all
+behave like a markdown page. `?raw=1` on an SVG URL serves the raw bytes with
+`Content-Disposition: inline` and an mtime-based ETag (If-None-Match → 304),
+so edits propagate straight to the `<img>` on reload. The layout rules mirror
+the PDF page (`#content:has(> .svg-frame)` goes full-bleed from the sidebar's
+edge), but the top-right controls stay — SVG is text, so the source view
+still works.
+
+Markdown that embeds an SVG (`![logo](logo.svg)`) keeps getting raw bytes even
+when the file is tracked: an `<img>` request advertises `image/svg+xml` in its
+`Accept` header, a top-level navigation does not — the presence of that type
+selects raw bytes over the wrapper page. Fully untracked `.svg` files serve
+as plain images from disk regardless, and the watcher still triggers a reload
+when such a file changes. Watcher events are
+filtered to writes and removals — read activity from serving the file itself
+must not refresh a tracked SVG, or it would re-read itself forever.
+
 ### GFM alerts (server-side, `--with-gfm`)
 
 When `--with-gfm` (alias `--gfm`) is passed, a final post-processor
