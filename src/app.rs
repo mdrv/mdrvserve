@@ -708,10 +708,12 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
                         // forever.
                         notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
                             // Tracked SVGs go through the normal change
-                            // path so their entry is refreshed; untracked
-                            // ones (plain images referenced from markdown)
-                            // have no tracked state and just trigger a
-                            // page reload.
+                            // path so their entry is refreshed. Untracked
+                            // ones start being tracked when `--include-svg`
+                            // is on in directory mode — a newly-created SVG
+                            // must join the sidebar and get the wrapper
+                            // page, not raw bytes. Otherwise just reload
+                            // so <img> embeds pick up the new bytes.
                             if is_svg_file(path) {
                                 let svg_tracked = {
                                     let state_guard = state.lock().await;
@@ -722,8 +724,16 @@ async fn handle_file_event(event: Event, state: &SharedMarkdownState) {
                                 if svg_tracked {
                                     handle_markdown_file_change(path, state).await;
                                 } else {
-                                    let state_guard = state.lock().await;
-                                    let _ = state_guard.change_tx.send(ServerMessage::Reload);
+                                    let track_new = {
+                                        let state_guard = state.lock().await;
+                                        state_guard.is_directory_mode && state_guard.include_svg
+                                    };
+                                    if track_new {
+                                        handle_markdown_file_change(path, state).await;
+                                    } else {
+                                        let state_guard = state.lock().await;
+                                        let _ = state_guard.change_tx.send(ServerMessage::Reload);
+                                    }
                                 }
                             } else {
                                 let state_guard = state.lock().await;
@@ -3379,6 +3389,65 @@ $$\n";
         let new_content = extract_content(&new_file_body);
         assert!(new_content.contains("<h1>Test 4</h1>"));
         assert!(new_content.contains("This is a new file"));
+    }
+
+    #[tokio::test]
+    async fn test_directory_mode_new_svg_is_tracked_and_wrapped() {
+        // Regression: a .svg created after startup used to stay untracked —
+        // it never joined the sidebar, and a manual navigation to its URL
+        // returned raw bytes instead of the wrapper page.
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        fs::write(temp_dir.path().join("index.md"), TEST_FILE_1_CONTENT)
+            .expect("Failed to write index.md");
+
+        let base_dir = temp_dir.path().to_path_buf();
+        let tracked_files = scan_markdown_files(&base_dir, false, false, false, false, true)
+            .expect("Failed to scan");
+
+        let router = new_router(
+            base_dir,
+            tracked_files,
+            true,
+            false,
+            DiagramOpts::default(),
+            false,
+            false,
+            false,
+            true,
+        )
+        .expect("Failed to create router");
+        let server = TestServer::builder().http_transport().build(router);
+
+        // The new SVG arrives while the server is already running — the
+        // watcher's Create event must add it to tracking.
+        let svg = temp_dir.path().join("fresh.svg");
+        fs::write(
+            &svg,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="teal"/></svg>"#,
+        )
+        .expect("Failed to create new svg");
+
+        // Wait for the watcher to pick the file up (poll, don't guess).
+        let mut nav_has_svg = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(FILE_WATCH_DELAY_MS)).await;
+            let body = server.get("/index.md").await.text();
+            if extract_nav_json(&body).contains("fresh.svg") {
+                nav_has_svg = true;
+                break;
+            }
+        }
+        assert!(nav_has_svg, "new SVG should appear in navigation");
+
+        // Navigation to the new SVG must serve the wrapper page (standard
+        // shell with an <img> over ?raw=1), not raw SVG bytes.
+        let response = server.get("/fresh.svg").await;
+        assert_eq!(response.status_code(), 200);
+        let content = extract_content(&response.text());
+        assert!(
+            content.contains(r#"class="svg-frame""#),
+            "tracked SVG navigation should return the wrapper page, got: {content}"
+        );
     }
 
     #[tokio::test]
