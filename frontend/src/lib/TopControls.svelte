@@ -23,6 +23,32 @@
 
 	let pct = $derived(Math.round(textZoom * 100))
 
+	// Click-to-edit zoom: the percentage label swaps for a text input so
+	// a precise value (e.g. 200) can be typed, beyond the slider's cap.
+	const ZOOM_MIN_PCT = 25
+	const ZOOM_MAX_PCT = 500
+	let editingZoom = $state(false)
+	let zoomDraft = $state('')
+
+	function openZoomInput() {
+		zoomDraft = String(pct)
+		editingZoom = true
+	}
+
+	function commitZoomInput() {
+		if (!editingZoom) return
+		editingZoom = false
+		const parsed = Number.parseFloat(zoomDraft)
+		if (Number.isFinite(parsed)) {
+			textZoom = Math.min(ZOOM_MAX_PCT, Math.max(ZOOM_MIN_PCT, parsed)) / 100
+		}
+	}
+
+	function zoomInputKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') commitZoomInput()
+		else if (event.key === 'Escape') editingZoom = false
+	}
+
 	let now = $state(Date.now())
 
 	$effect(() => {
@@ -51,8 +77,7 @@
 	{/if}
 	{#if isTypst}
 		<button
-			class='typst-flow-btn'
-			class:active={freeflowAvailable && typstFlow === 'freeflow'}
+			class={['typst-flow-btn', { active: freeflowAvailable && typstFlow === 'freeflow' }]}
 			disabled={!freeflowAvailable}
 			onclick={() => (typstFlow = typstFlow === 'freeflow' ? 'paged' : 'freeflow')}
 			aria-label='Toggle Typst free-flow layout'
@@ -64,15 +89,44 @@
 		</button>
 	{/if}
 	<div class='zoom-control'>
+		{#if isTypst && typstFlow === 'paged'}
+			<button
+				class='zoom-fit-btn'
+				onclick={() => (textZoom = 1)}
+				aria-label='Fit page width (100%)'
+				title='Fit page width (100%)'
+			>
+				⤢
+			</button>
+		{/if}
 		<input
 			class='zoom-slider'
 			type='range'
 			min='50'
-			max='150'
+			max='200'
 			step='10'
 			bind:value={() => pct, (v) => (textZoom = Number(v) / 100)}
 		/>
-		<span class='zoom-value'>{pct}%</span>
+		{#if editingZoom}
+			<input
+				class='zoom-input'
+				type='text'
+				inputmode='decimal'
+				bind:value={zoomDraft}
+				onblur={commitZoomInput}
+				onkeydown={zoomInputKeydown}
+				aria-label='Zoom percentage'
+			/>
+		{:else}
+			<button
+				class='zoom-value'
+				onclick={openZoomInput}
+				aria-label='Zoom percentage, click to type a value'
+				title='Click to type a zoom value'
+			>
+				{pct}%
+			</button>
+		{/if}
 	</div>
 	{#if sourceAvailable}
 		<button class='source-btn' onclick={onopensource} aria-label='View source'>

@@ -16,6 +16,7 @@ try {
 		showNavigation: false,
 		mermaidEnabled: false,
 		isTypst: false,
+		isPdf: false,
 		contentFreeflow: '',
 		lastModified: 0,
 	}

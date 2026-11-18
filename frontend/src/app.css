@@ -571,11 +571,55 @@ body {
 }
 
 .zoom-value {
+	/* A button so the percentage label is clickable (opens the input). */
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	font-family: inherit;
 	font-size: 12px;
 	color: var(--text-color);
 	min-width: 34px;
 	text-align: right;
 	user-select: none;
+}
+
+.zoom-value:hover,
+.zoom-value:focus-visible {
+	color: var(--link-color);
+	outline: none;
+}
+
+.zoom-input {
+	width: 44px;
+	font-family: inherit;
+	font-size: 12px;
+	color: var(--text-color);
+	background: transparent;
+	border: 1px solid var(--link-color);
+	border-radius: 4px;
+	padding: 1px 4px;
+	text-align: right;
+}
+
+.zoom-input:focus {
+	outline: none;
+}
+
+.zoom-fit-btn {
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+	color: var(--text-color);
+}
+
+.zoom-fit-btn:hover,
+.zoom-fit-btn:focus-visible {
+	color: var(--link-color);
+	outline: none;
 }
 
 /* Theme Modal */
@@ -847,21 +891,24 @@ pre code {
 .typst-doc {
 	margin: 16px 0;
 	text-align: center;
-	overflow: auto;
+	overflow-x: auto;
 	max-width: 100%;
 }
 
 .typst-doc-page {
-	display: inline-block;
-	max-width: 100%;
-	/* Pages are inlined SVGs, which font-size cannot scale, so the
-	   zoom control drives them here. Free-flow pages are semantic HTML
-	   and keep scaling through #content's font-size. */
-	zoom: var(--text-zoom, 1);
+	display: block;
 }
 
 .typst-doc-page svg {
-	max-width: 100%;
+	/* The zoom control scales pages by width: 100% means "fitted to the
+	   content column", not the Typst page's natural size. Zooming in
+	   overflows the column (horizontally scrollable) instead of being
+	   clamped by a max-width. Free-flow pages are semantic HTML and keep
+	   scaling through #content's font-size. */
+	display: block;
+	margin: 0 auto;
+	width: calc(100% * var(--text-zoom, 1));
+	max-width: none;
 	height: auto;
 }
 
