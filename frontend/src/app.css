@@ -307,6 +307,9 @@ body {
 	max-width: 100%;
 	height: auto;
 	margin: 20px auto;
+	/* An <img> ignores font-size, so the zoom control must scale it
+	   here directly. max-width still clamps at the content column. */
+	zoom: var(--text-zoom, 1);
 }
 
 /* pdf.js fallback viewer (experimental; see src/lib/pdfjs.ts) */
@@ -851,6 +854,10 @@ pre code {
 .typst-doc-page {
 	display: inline-block;
 	max-width: 100%;
+	/* Pages are inlined SVGs, which font-size cannot scale, so the
+	   zoom control drives them here. Free-flow pages are semantic HTML
+	   and keep scaling through #content's font-size. */
+	zoom: var(--text-zoom, 1);
 }
 
 .typst-doc-page svg {
