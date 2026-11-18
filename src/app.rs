@@ -1006,6 +1006,102 @@ async fn serve_html_root(State(state): State<SharedMarkdownState>) -> impl IntoR
     render_markdown(&state, &filename).await
 }
 
+/// Classic Levenshtein edit distance (insert/delete/substitute),
+/// computed with a two-row DP over `char`s so Unicode names compare
+/// correctly. Kept dependency-free: one small function for one small
+/// feature.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for (j, bc) in b.iter().enumerate() {
+            let cost = usize::from(a[i - 1] != *bc);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Tracked files whose name is closest to `requested` in Levenshtein
+/// distance, case-insensitively. Each candidate is scored against both
+/// its full relative path and its basename (the cheaper wins), so a
+/// typo in either the file or a folder name still finds the target.
+/// Candidates beyond half the longer name's length are dropped, so a
+/// one-letter typo suggests the intended file while unrelated input
+/// suggests nothing. Sorted by distance, then path, capped at `limit`.
+fn closest_files(requested: &str, candidates: &[String], limit: usize) -> Vec<String> {
+    let wanted = requested.to_lowercase();
+    let wanted_base = wanted.rsplit('/').next().unwrap_or(&wanted);
+    let wanted_chars = wanted.chars().count();
+    let mut scored: Vec<(usize, String)> = candidates
+        .iter()
+        .filter(|candidate| candidate.as_str() != requested)
+        .filter_map(|candidate| {
+            let lowered = candidate.to_lowercase();
+            let base = lowered.rsplit('/').next().unwrap_or(&lowered);
+            let dist = levenshtein(&wanted, &lowered).min(levenshtein(wanted_base, base));
+            let max_chars = lowered.chars().count().max(wanted_chars).max(1);
+            (dist * 2 <= max_chars).then_some((dist, candidate.clone()))
+        })
+        .collect();
+    scored.sort();
+    scored.truncate(limit);
+    scored.into_iter().map(|(_, path)| path).collect()
+}
+
+/// Standalone 404 page for missing/untracked files: a link back to the
+/// root plus the closest tracked files by name, so a typo'd URL or a
+/// deleted file is easy to recover from. Themed after the app's default
+/// (Catppuccin Mocha) since it renders outside the Svelte shell.
+fn not_found_page(requested: &str, suggestions: &[String]) -> Html<String> {
+    let mut list = String::new();
+    if !suggestions.is_empty() {
+        list.push_str("<p>Did you mean:</p><ul>");
+        for path in suggestions {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path);
+            list.push_str(&format!(
+                "<li><a href=\"/{0}\">{1}</a></li>",
+                escape_attr(path),
+                escape_html(name),
+            ));
+        }
+        list.push_str("</ul>");
+    }
+    Html(format!(
+        "<!DOCTYPE html><html lang=\"en\"><head>\
+<meta charset=\"UTF-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\
+<title>File not found — mdrvserve</title><style>\
+body{{margin:0;min-height:100vh;display:grid;place-items:center;\
+font-family:system-ui,sans-serif;background:#1e1e2e;color:#cdd6f4}}\
+main{{max-width:32rem;padding:2rem;text-align:center}}\
+h1{{font-size:1.4rem;margin:0 0 .5rem}}\
+code{{background:#313244;padding:.15rem .4rem;border-radius:.3rem;\
+font-size:.9em;overflow-wrap:anywhere}}\
+ul{{list-style:none;padding:0;margin:1rem 0 0;line-height:2}}\
+a{{color:#89b4fa}}</style></head><body><main>\
+<h1>404 — File not found</h1>\
+<p><code>{}</code> is not being served.</p>\
+<p><a href=\"/\">← Back to root</a></p>{}\
+</main></body></html>",
+        escape_html(requested),
+        list,
+    ))
+}
+
 async fn serve_file(
     AxumPath(filename): AxumPath<String>,
     RawQuery(raw_query): RawQuery,
@@ -1029,7 +1125,9 @@ async fn serve_file(
         let mut state = state.lock().await;
 
         if !state.tracked_files.contains_key(&filename) {
-            return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+            let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+            let page = not_found_page(&filename, &closest_files(&filename, &candidates, 5));
+            return (StatusCode::NOT_FOUND, page).into_response();
         }
 
         state.ensure_rendered(&filename);
@@ -1039,7 +1137,9 @@ async fn serve_file(
         let mut state = state.lock().await;
 
         if !state.tracked_files.contains_key(&filename) {
-            return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+            let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+            let page = not_found_page(&filename, &closest_files(&filename, &candidates, 5));
+            return (StatusCode::NOT_FOUND, page).into_response();
         }
 
         if wants_raw {
@@ -1073,7 +1173,12 @@ async fn serve_file(
     } else if is_image_file(&filename) {
         serve_static_file_inner(filename, state).await
     } else {
-        (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response()
+        let candidates: Vec<String> = {
+            let state = state.lock().await;
+            state.tracked_files.keys().cloned().collect()
+        };
+        let page = not_found_page(&filename, &closest_files(&filename, &candidates, 5));
+        (StatusCode::NOT_FOUND, page).into_response()
     }
 }
 
@@ -1711,7 +1816,11 @@ fn scale_svg_to_em(svg: &str, font_size: f64) -> String {
 async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCode, Html<String>) {
     let tracked = match state.tracked_files.get(current_file) {
         Some(t) => t,
-        None => return (StatusCode::NOT_FOUND, Html("File not found".to_string())),
+        None => {
+            let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+            let page = not_found_page(current_file, &closest_files(current_file, &candidates, 5));
+            return (StatusCode::NOT_FOUND, page);
+        }
     };
     let content = tracked.html.as_deref().unwrap_or("");
     let source = tracked.source.as_str();
@@ -1837,20 +1946,18 @@ async fn serve_static_file_inner(
                     )
                         .into_response()
                 }
-                Err(_) => (
-                    StatusCode::NOT_FOUND,
-                    [(header::CONTENT_TYPE, "text/plain")],
-                    "File not found".to_string(),
-                )
-                    .into_response(),
+                Err(_) => {
+                    let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+                    let page = not_found_page(&filename, &closest_files(&filename, &candidates, 5));
+                    (StatusCode::NOT_FOUND, page).into_response()
+                }
             }
         }
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "text/plain")],
-            "File not found".to_string(),
-        )
-            .into_response(),
+        Err(_) => {
+            let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+            let page = not_found_page(&filename, &closest_files(&filename, &candidates, 5));
+            page.into_response()
+        }
     }
 }
 
@@ -1866,7 +1973,9 @@ async fn serve_raw_file(
 ) -> axum::response::Response {
     let full_path = state.base_dir.join(filename);
     let Ok(canonical_path) = full_path.canonicalize() else {
-        return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+        let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+        let page = not_found_page(filename, &closest_files(filename, &candidates, 5));
+        return (StatusCode::NOT_FOUND, page).into_response();
     };
     if !canonical_path.starts_with(&state.base_dir) {
         return (
@@ -1880,7 +1989,9 @@ async fn serve_raw_file(
         fs::read(&canonical_path),
         fs::metadata(&canonical_path).and_then(|m| m.modified()),
     ) else {
-        return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
+        let candidates: Vec<String> = state.tracked_files.keys().cloned().collect();
+        let page = not_found_page(filename, &closest_files(filename, &candidates, 5));
+        return (StatusCode::NOT_FOUND, page).into_response();
     };
 
     let etag = mtime_etag(modified, bytes.len());
@@ -3197,6 +3308,61 @@ $$\n";
 
         let response = server.get("/nonexistent.md").await;
         assert_eq!(response.status_code(), 404);
+        let body = response.text();
+        assert!(
+            body.contains(r#"href="/""#),
+            "404 page should link back to the root, got: {body}"
+        );
+        assert!(body.contains("File not found"));
+    }
+
+    #[tokio::test]
+    async fn test_file_not_found_suggests_similar_files() {
+        let (server, _temp_dir) = create_directory_server().await;
+
+        // A one-letter typo of test1.md: the 404 page should offer the
+        // tracked file as a suggestion.
+        let response = server.get("/test1.mdx").await;
+        assert_eq!(response.status_code(), 404);
+        let body = response.text();
+        assert!(
+            body.contains(r#"href="/test1.md""#),
+            "typo'd filename should suggest the tracked file, got: {body}"
+        );
+
+        // Nothing remotely similar: no suggestion list, back link stays.
+        let response = server.get("/zzzzqqqq.md").await;
+        assert_eq!(response.status_code(), 404);
+        let body = response.text();
+        assert!(body.contains(r#"href="/""#));
+        assert!(!body.contains("Did you mean"), "got: {body}");
+    }
+
+    #[test]
+    fn test_levenshtein_distance() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("test1.md", "test1.md"), 0);
+        assert_eq!(levenshtein("café", "cafe"), 1);
+    }
+
+    #[test]
+    fn test_closest_files_ranks_and_thresholds() {
+        let candidates: Vec<String> = ["alpha.md", "beta.md", "guide/intro.md", "alphabet.md"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let suggestions = closest_files("alph.md", &candidates, 5);
+        assert_eq!(suggestions.first().map(String::as_str), Some("alpha.md"));
+
+        let suggestions = closest_files("ALPHA.MD", &candidates, 5);
+        assert!(suggestions.contains(&"alpha.md".to_string()));
+
+        assert!(closest_files("zzzzzzzz.md", &candidates, 5).is_empty());
+        assert!(closest_files("alpha.md", &candidates, 1).len() <= 1);
     }
 
     #[tokio::test]
